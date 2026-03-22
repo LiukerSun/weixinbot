@@ -10,7 +10,7 @@ Usage:
   ${SCRIPT_PATH}
   ${SCRIPT_PATH} --interactive
   ${SCRIPT_PATH} --sync-instance-config <instance_dir>
-  ${SCRIPT_PATH} <instance_name> <gateway_port|auto> <bridge_port|auto> [--without-weixin] [--skip-weixin-login] [--primary-model-provider <zai|codex>] [--zai-api-key <key>] [--codex-api-key <key>] [--codex-base-url <url>] [--codex-model <model>] [--brave-api-key <key>]
+  ${SCRIPT_PATH} <instance_name> <gateway_port|auto> <bridge_port|auto> [--without-weixin] [--skip-weixin-login] [--primary-model-provider <zai|openai>] [--zai-api-key <key>] [--openai-api-key <key>] [--openai-base-url <url>] [--openai-model <model>] [--brave-api-key <key>]
 
 Creates a new OpenClaw instance under \${OPENCLAW_INSTANCES_DIR:-/root/openclaw-instances}/<instance_name> using the current
 official OpenClaw image template. By default, openclaw-weixin is installed.
@@ -307,16 +307,13 @@ normalize_primary_provider() {
       printf 'openai\n'
       ;;
     *)
-      fail "primary model provider must be zai or codex/openai"
+      fail "primary model provider must be zai or openai (codex is still accepted as an alias)"
       ;;
   esac
 }
 
 display_primary_provider() {
-  case "${1:-}" in
-    openai) printf 'codex\n' ;;
-    *) printf '%s\n' "${1:-zai}" ;;
-  esac
+  printf '%s\n' "${1:-zai}"
 }
 
 is_port_in_use() {
@@ -553,11 +550,11 @@ if [[ "$INTERACTIVE" == "1" ]]; then
   else
     WITH_WEIXIN=0
   fi
-  PRIMARY_MODEL_PROVIDER="$(normalize_primary_provider "$(prompt_required "Primary model provider (zai/codex)" "$(display_primary_provider "$PRIMARY_MODEL_PROVIDER")")")"
+  PRIMARY_MODEL_PROVIDER="$(normalize_primary_provider "$(prompt_required "Primary model provider (zai/openai)" "$(display_primary_provider "$PRIMARY_MODEL_PROVIDER")")")"
   ZAI_API_KEY_VALUE="$(prompt_optional "ZAI API key (optional)" "$ZAI_API_KEY_VALUE")"
-  OPENAI_API_KEY_VALUE="$(prompt_optional "Codex/OpenAI API key (optional)" "$OPENAI_API_KEY_VALUE")"
-  OPENAI_BASE_URL_VALUE="$(prompt_optional "Codex/OpenAI base URL (optional)" "$OPENAI_BASE_URL_VALUE")"
-  OPENAI_MODEL_VALUE="$(prompt_optional "Codex/OpenAI model" "$OPENAI_MODEL_VALUE")"
+  OPENAI_API_KEY_VALUE="$(prompt_optional "OpenAI API key (optional)" "$OPENAI_API_KEY_VALUE")"
+  OPENAI_BASE_URL_VALUE="$(prompt_optional "OpenAI base URL (optional)" "$OPENAI_BASE_URL_VALUE")"
+  OPENAI_MODEL_VALUE="$(prompt_optional "OpenAI model" "$OPENAI_MODEL_VALUE")"
   BRAVE_API_KEY_VALUE="$(prompt_optional "Brave API key" "$BRAVE_API_KEY_VALUE")"
 
   echo ""
@@ -567,8 +564,8 @@ if [[ "$INTERACTIVE" == "1" ]]; then
   echo "  Bridge port: ${BRIDGE_PORT}"
   echo "  Weixin: $([[ "$WITH_WEIXIN" == "1" ]] && echo yes || echo no)"
   echo "  Primary model provider: $(display_primary_provider "$PRIMARY_MODEL_PROVIDER")"
-  echo "  Codex/OpenAI model: ${OPENAI_MODEL_VALUE}"
-  echo "  Codex/OpenAI base URL: ${OPENAI_BASE_URL_VALUE:-<default>}"
+  echo "  OpenAI model: ${OPENAI_MODEL_VALUE}"
+  echo "  OpenAI base URL: ${OPENAI_BASE_URL_VALUE:-<default>}"
   echo "  Auto weixin login: $([[ "$WITH_WEIXIN" == "1" && "$AUTO_WEIXIN_LOGIN" == "1" ]] && echo yes || echo no)"
   echo "  Instance dir: ${INSTANCES_BASE_DIR}/${INSTANCE_NAME}"
   echo ""
@@ -629,6 +626,94 @@ restart_gateway() {
   wait_for_gateway
 }
 
+write_compose_file() {
+  cat >"${INSTANCE_DIR}/docker-compose.yml" <<'EOF'
+services:
+  openclaw-gateway:
+    image: ${OPENCLAW_IMAGE}
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
+      OPENCLAW_PRIMARY_MODEL_PROVIDER: ${OPENCLAW_PRIMARY_MODEL_PROVIDER:-}
+      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
+      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
+      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+      ZAI_API_KEY: ${ZAI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
+      TZ: ${OPENCLAW_TZ}
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+    ports:
+      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT}:18789"
+      - "127.0.0.1:${OPENCLAW_BRIDGE_PORT}:18790"
+    init: true
+    restart: unless-stopped
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--bind",
+        "${OPENCLAW_GATEWAY_BIND}",
+        "--port",
+        "18789",
+      ]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  openclaw-cli:
+    profiles: ["cli"]
+    image: ${OPENCLAW_IMAGE}
+    network_mode: "service:openclaw-gateway"
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
+      OPENCLAW_PRIMARY_MODEL_PROVIDER: ${OPENCLAW_PRIMARY_MODEL_PROVIDER:-}
+      BROWSER: echo
+      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
+      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
+      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+      ZAI_API_KEY: ${ZAI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
+      TZ: ${OPENCLAW_TZ}
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+    stdin_open: true
+    tty: true
+    init: true
+    entrypoint: ["node", "dist/index.js"]
+    depends_on:
+      - openclaw-gateway
+EOF
+}
+
 write_config_json() {
   node - "${STATE_DIR}/openclaw.json" "${INSTANCE_DIR}/.env" <<'EOF'
 const fs = require("fs");
@@ -656,6 +741,7 @@ const primaryProvider = (env.OPENCLAW_PRIMARY_MODEL_PROVIDER || "zai").trim().to
 const openaiApiKey = env.OPENAI_API_KEY || "";
 const openaiBaseUrl = env.OPENAI_BASE_URL || "";
 const openaiModel = env.OPENAI_MODEL || "gpt-5.4";
+const resolvedOpenAiBaseUrl = openaiBaseUrl || "https://api.openai.com/v1";
 const enableOpenAI = Boolean(openaiApiKey || openaiBaseUrl || primaryProvider === "openai");
 
 const data = {
@@ -712,6 +798,7 @@ if (enableOpenAI) {
     providers: {
       openai: {
         apiKey: "$OPENAI_API_KEY",
+        baseUrl: resolvedOpenAiBaseUrl,
         api: "openai-completions",
         models: [
           {
@@ -733,9 +820,6 @@ if (enableOpenAI) {
     },
   };
 
-  if (openaiBaseUrl) {
-    data.models.providers.openai.baseUrl = openaiBaseUrl;
-  }
 }
 
 fs.writeFileSync(path, JSON.stringify(data, null, 2) + "\n");
@@ -767,7 +851,9 @@ if [[ -n "$SYNC_INSTANCE_DIR" ]]; then
   [[ -d "$STATE_DIR" ]] || fail "Missing state directory: ${STATE_DIR}"
   ensure_node_binary || fail "Missing dependency: node"
 
+  write_compose_file
   write_config_json
+  echo "Synced OpenClaw compose: ${INSTANCE_DIR}/docker-compose.yml"
   echo "Synced OpenClaw config: ${STATE_DIR}/openclaw.json"
   exit 0
 fi
@@ -780,89 +866,7 @@ mkdir -p "${INSTANCES_BASE_DIR}"
 mkdir -p "$STATE_DIR" "$WORKSPACE_DIR"
 CREATED_INSTANCE_DIR=1
 chmod 777 "$STATE_DIR" "$WORKSPACE_DIR"
-cat >"${INSTANCE_DIR}/docker-compose.yml" <<'EOF'
-services:
-  openclaw-gateway:
-    image: ${OPENCLAW_IMAGE}
-    environment:
-      HOME: /home/node
-      TERM: xterm-256color
-      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
-      OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
-      ZAI_API_KEY: ${ZAI_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-}
-      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
-      TZ: ${OPENCLAW_TZ}
-    volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
-    ports:
-      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT}:18789"
-      - "127.0.0.1:${OPENCLAW_BRIDGE_PORT}:18790"
-    init: true
-    restart: unless-stopped
-    command:
-      [
-        "node",
-        "dist/index.js",
-        "gateway",
-        "--bind",
-        "${OPENCLAW_GATEWAY_BIND}",
-        "--port",
-        "18789",
-      ]
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
-        ]
-      interval: 30s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-
-  openclaw-cli:
-    profiles: ["cli"]
-    image: ${OPENCLAW_IMAGE}
-    network_mode: "service:openclaw-gateway"
-    cap_drop:
-      - NET_RAW
-      - NET_ADMIN
-    security_opt:
-      - no-new-privileges:true
-    environment:
-      HOME: /home/node
-      TERM: xterm-256color
-      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
-      OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
-      BROWSER: echo
-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
-      ZAI_API_KEY: ${ZAI_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-}
-      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
-      TZ: ${OPENCLAW_TZ}
-    volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
-    stdin_open: true
-    tty: true
-    init: true
-    entrypoint: ["node", "dist/index.js"]
-    depends_on:
-      - openclaw-gateway
-EOF
+write_compose_file
 
 cat >"${INSTANCE_DIR}/.env" <<EOF
 OPENCLAW_IMAGE=ghcr.io/openclaw/openclaw:latest

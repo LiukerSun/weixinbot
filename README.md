@@ -6,7 +6,7 @@
 
 - 使用官方镜像 `ghcr.io/openclaw/openclaw:latest`
 - 默认安装 `openclaw-weixin`
-- 默认支持 `ZAI`，也可同时配置 `Codex/OpenAI-compatible` 模型提供方
+- 默认支持 `ZAI`，也可同时配置 `OpenAI-compatible` 模型提供方
 - 支持引导式安装和参数安装
 - 自动探测未占用端口
 - 自动检查并安装宿主机依赖
@@ -56,10 +56,10 @@ bash <(curl -fsSL https://raw.githubusercontent.com/LiukerSun/weixinbot/master/i
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/LiukerSun/weixinbot/master/install-openclaw.sh) \
   openclaw_demo auto auto \
-  --primary-model-provider codex \
-  --codex-api-key "your_codex_api_key" \
-  --codex-base-url "https://your-openai-compatible-endpoint/v1" \
-  --codex-model "gpt-5.4" \
+  --primary-model-provider openai \
+  --openai-api-key "your_openai_api_key" \
+  --openai-base-url "https://your-openai-compatible-endpoint/v1" \
+  --openai-model "gpt-5.4" \
   --zai-api-key "your_zai_api_key" \
   --brave-api-key "your_brave_api_key"
 ```
@@ -115,11 +115,11 @@ bash ./create-openclaw-instance.sh
 - Gateway 端口
 - Bridge 端口
 - 是否安装 `openclaw-weixin`
-- 默认主模型提供方（`zai` 或 `codex`）
+- 默认主模型提供方（`zai` 或 `openai`）
 - `ZAI_API_KEY`
-- `Codex/OpenAI API key`
-- `Codex/OpenAI base URL`
-- `Codex/OpenAI model`
+- `OpenAI API key`
+- `OpenAI base URL`
+- `OpenAI model`
 - `BRAVE_API_KEY`
 
 端口默认会自动给出一组未占用的建议值。
@@ -128,10 +128,10 @@ bash ./create-openclaw-instance.sh
 
 ```bash
 bash ./create-openclaw-instance.sh openclaw_demo auto auto \
-  --primary-model-provider codex \
-  --codex-api-key "your_codex_api_key" \
-  --codex-base-url "https://your-openai-compatible-endpoint/v1" \
-  --codex-model "gpt-5.4" \
+  --primary-model-provider openai \
+  --openai-api-key "your_openai_api_key" \
+  --openai-base-url "https://your-openai-compatible-endpoint/v1" \
+  --openai-model "gpt-5.4" \
   --zai-api-key "your_zai_api_key" \
   --brave-api-key "your_brave_api_key"
 ```
@@ -141,8 +141,9 @@ bash ./create-openclaw-instance.sh openclaw_demo auto auto \
 - `auto auto` 表示自动寻找一组可用端口
 - 默认安装 `openclaw-weixin`
 - 默认主模型提供方是 `zai`
-- 如果要把默认模型切到 Codex/OpenAI-compatible，可加 `--primary-model-provider codex`
-- Codex/OpenAI-compatible 配置支持 `--codex-api-key`、`--codex-base-url`、`--codex-model`
+- 如果要把默认模型切到 OpenAI-compatible，可加 `--primary-model-provider openai`
+- OpenAI-compatible 配置支持 `--openai-api-key`、`--openai-base-url`、`--openai-model`
+- 为兼容旧命令，`codex` / `--codex-*` 仍然可用，但推荐统一改用 `openai` / `--openai-*`
 - 默认在创建完成后自动尝试微信登录
 - 如果暂时不想拉起微信登录，可加 `--skip-weixin-login`
 - 如果不想安装微信插件，可加 `--without-weixin`
@@ -168,7 +169,7 @@ bash ./weixin-login.sh openclaw_demo
 - 检查实例是否存在
 - 如果实例不存在，先调用创建脚本创建
 - 确保微信插件已安装
-- 按实例 `.env` 同步 `ZAI` / `Codex/OpenAI-compatible` 配置，避免重登时把模型配置覆盖回默认值
+- 按实例 `.env` 同步 `ZAI` / `OpenAI-compatible` 配置，避免重登时把模型配置覆盖回默认值
 - 重新写入补丁
 - 重启网关并显示二维码
 
@@ -230,11 +231,11 @@ bash ./create-openclaw-instance.sh <instance_name> <gateway_port|auto> <bridge_p
   [--with-weixin] \
   [--without-weixin] \
   [--skip-weixin-login] \
-  [--primary-model-provider <zai|codex>] \
+  [--primary-model-provider <zai|openai>] \
   [--zai-api-key <key>] \
-  [--codex-api-key <key>] \
-  [--codex-base-url <url>] \
-  [--codex-model <model>] \
+  [--openai-api-key <key>] \
+  [--openai-base-url <url>] \
+  [--openai-model <model>] \
   [--brave-api-key <key>]
 ```
 
@@ -243,6 +244,13 @@ bash ./create-openclaw-instance.sh <instance_name> <gateway_port|auto> <bridge_p
 ```bash
 bash ./create-openclaw-instance.sh --sync-instance-config /root/openclaw-instances/openclaw_demo
 ```
+
+如果实例是旧版本脚本创建的，这条命令会同时重写：
+
+- `docker-compose.yml`
+- `state/openclaw.json`
+
+然后重启实例即可让新的 OpenAI/Codex 配置生效。
 
 登录脚本：
 
@@ -254,10 +262,10 @@ bash ./weixin-login.sh <instance_name>
 
 ```bash
 export ZAI_API_KEY="your_zai_api_key"
-export OPENAI_API_KEY="your_codex_api_key"
+export OPENAI_API_KEY="your_openai_api_key"
 export OPENAI_BASE_URL="https://your-openai-compatible-endpoint/v1"
 export OPENAI_MODEL="gpt-5.4"
-export OPENCLAW_PRIMARY_MODEL_PROVIDER="codex"
+export OPENCLAW_PRIMARY_MODEL_PROVIDER="openai"
 export BRAVE_API_KEY="your_brave_api_key"
 export OPENCLAW_INSTANCES_DIR="/root/openclaw-instances"
 bash ./create-openclaw-instance.sh
@@ -272,7 +280,7 @@ export ZAI_API_KEY="your_zai_api_key"
 export OPENAI_API_KEY="your_codex_api_key"
 export OPENAI_BASE_URL="https://your-openai-compatible-endpoint/v1"
 export OPENAI_MODEL="gpt-5.4"
-export OPENCLAW_PRIMARY_MODEL_PROVIDER="codex"
+export OPENCLAW_PRIMARY_MODEL_PROVIDER="openai"
 export BRAVE_API_KEY="your_brave_api_key"
 bash <(curl -fsSL https://raw.githubusercontent.com/LiukerSun/weixinbot/master/install-openclaw.sh)
 ```
