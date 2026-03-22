@@ -35,12 +35,51 @@
 - 自动安装逻辑当前只支持 Debian/Ubuntu 的 `apt-get`
 - 首次运行如果宿主机缺少依赖，脚本会先安装 Docker、Compose、Node.js 和基础工具，然后再继续创建实例
 
-## 获取脚本
+## 一键安装
+
+推荐直接拉取引导脚本，它会自动下载并安装：
+
+- `create-openclaw-instance.sh`
+- `weixin-login.sh`
+
+默认安装位置是 `/usr/local/bin`，然后立即开始 OpenClaw 安装流程。
+
+### 交互式安装
 
 ```bash
-git clone git@github.com:LiukerSun/weixinbot.git
-cd weixinbot
-chmod +x create-openclaw-instance.sh weixin-login.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/LiukerSun/weixinbot/master/install-openclaw.sh)
+```
+
+### 参数模式安装
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/LiukerSun/weixinbot/master/install-openclaw.sh) \
+  openclaw_demo auto auto \
+  --zai-api-key "your_zai_api_key" \
+  --brave-api-key "your_brave_api_key"
+```
+
+说明：
+
+- 这条命令会先把脚本安装到 `/usr/local/bin`
+- 然后执行 `/usr/local/bin/create-openclaw-instance.sh`
+- 后续如果需要重新扫码，可直接执行 `/usr/local/bin/weixin-login.sh openclaw_demo`
+- 如果你不想安装到 `/usr/local/bin`，可以先设置 `OPENCLAW_INSTALL_DIR`
+
+例如：
+
+```bash
+export OPENCLAW_INSTALL_DIR="/root/.local/bin"
+bash <(curl -fsSL https://raw.githubusercontent.com/LiukerSun/weixinbot/master/install-openclaw.sh)
+```
+
+## 获取脚本
+
+如果你不想走引导脚本，也可以只拉主安装脚本：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LiukerSun/weixinbot/master/create-openclaw-instance.sh -o ./create-openclaw-instance.sh
+chmod +x ./create-openclaw-instance.sh
 ```
 
 ## 实例目录
@@ -198,12 +237,9 @@ bash ./create-openclaw-instance.sh
 新服务器推荐流程：
 
 ```bash
-git clone git@github.com:LiukerSun/weixinbot.git
-cd weixinbot
-chmod +x create-openclaw-instance.sh weixin-login.sh
 export ZAI_API_KEY="your_zai_api_key"
 export BRAVE_API_KEY="your_brave_api_key"
-bash ./create-openclaw-instance.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/LiukerSun/weixinbot/master/install-openclaw.sh)
 ```
 
 ## 注意事项
