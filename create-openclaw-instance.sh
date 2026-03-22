@@ -9,7 +9,8 @@ usage() {
 Usage:
   ${SCRIPT_PATH}
   ${SCRIPT_PATH} --interactive
-  ${SCRIPT_PATH} <instance_name> <gateway_port|auto> <bridge_port|auto> [--without-weixin] [--skip-weixin-login] [--zai-api-key <key>] [--brave-api-key <key>]
+  ${SCRIPT_PATH} --sync-instance-config <instance_dir>
+  ${SCRIPT_PATH} <instance_name> <gateway_port|auto> <bridge_port|auto> [--without-weixin] [--skip-weixin-login] [--primary-model-provider <zai|codex>] [--zai-api-key <key>] [--codex-api-key <key>] [--codex-base-url <url>] [--codex-model <model>] [--brave-api-key <key>]
 
 Creates a new OpenClaw instance under \${OPENCLAW_INSTANCES_DIR:-/root/openclaw-instances}/<instance_name> using the current
 official OpenClaw image template. By default, openclaw-weixin is installed.
@@ -294,6 +295,30 @@ prompt_yes_no() {
   done
 }
 
+normalize_primary_provider() {
+  local value
+  value="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+
+  case "$value" in
+    zai)
+      printf 'zai\n'
+      ;;
+    codex|openai)
+      printf 'openai\n'
+      ;;
+    *)
+      fail "primary model provider must be zai or codex/openai"
+      ;;
+  esac
+}
+
+display_primary_provider() {
+  case "${1:-}" in
+    openai) printf 'codex\n' ;;
+    *) printf '%s\n' "${1:-zai}" ;;
+  esac
+}
+
 is_port_in_use() {
   local port="$1"
   local status=0
@@ -411,7 +436,17 @@ if [[ "${1:-}" == "--ensure-host-deps" ]]; then
 fi
 
 INTERACTIVE=0
-if [[ $# -eq 0 ]]; then
+SYNC_INSTANCE_DIR=""
+if [[ "${1:-}" == "--sync-instance-config" ]]; then
+  shift
+  [[ $# -eq 1 ]] || fail "Usage: ${SCRIPT_PATH} --sync-instance-config <instance_dir>"
+  SYNC_INSTANCE_DIR="$1"
+  shift
+fi
+
+if [[ -n "$SYNC_INSTANCE_DIR" ]]; then
+  INTERACTIVE=0
+elif [[ $# -eq 0 ]]; then
   INTERACTIVE=1
 elif [[ "${1:-}" == "--interactive" ]]; then
   INTERACTIVE=1
@@ -425,10 +460,14 @@ BRIDGE_PORT=""
 WITH_WEIXIN=1
 AUTO_WEIXIN_LOGIN=1
 ZAI_API_KEY_VALUE="${ZAI_API_KEY:-}"
+OPENAI_API_KEY_VALUE="${OPENAI_API_KEY:-${CODEX_API_KEY:-}}"
+OPENAI_BASE_URL_VALUE="${OPENAI_BASE_URL:-${CODEX_BASE_URL:-}}"
+OPENAI_MODEL_VALUE="${OPENAI_MODEL:-${CODEX_MODEL:-gpt-5.4}}"
+PRIMARY_MODEL_PROVIDER="$(normalize_primary_provider "${OPENCLAW_PRIMARY_MODEL_PROVIDER:-zai}")"
 BRAVE_API_KEY_VALUE="${BRAVE_API_KEY:-}"
 INSTANCES_BASE_DIR="${OPENCLAW_INSTANCES_DIR:-/root/openclaw-instances}"
 
-if [[ "$INTERACTIVE" == "0" ]]; then
+if [[ -z "$SYNC_INSTANCE_DIR" && "$INTERACTIVE" == "0" ]]; then
   if [[ $# -lt 3 ]]; then
     usage
     exit 1
@@ -462,6 +501,26 @@ while [[ $# -gt 0 ]]; do
       ZAI_API_KEY_VALUE="${2:-}"
       shift 2
       ;;
+    --codex-api-key|--openai-api-key)
+      [[ $# -ge 2 ]] || fail "$1 requires a value"
+      OPENAI_API_KEY_VALUE="${2:-}"
+      shift 2
+      ;;
+    --codex-base-url|--openai-base-url)
+      [[ $# -ge 2 ]] || fail "$1 requires a value"
+      OPENAI_BASE_URL_VALUE="${2:-}"
+      shift 2
+      ;;
+    --codex-model|--openai-model)
+      [[ $# -ge 2 ]] || fail "$1 requires a value"
+      OPENAI_MODEL_VALUE="${2:-}"
+      shift 2
+      ;;
+    --primary-model-provider|--model-provider)
+      [[ $# -ge 2 ]] || fail "$1 requires a value"
+      PRIMARY_MODEL_PROVIDER="$(normalize_primary_provider "${2:-}")"
+      shift 2
+      ;;
     --brave-api-key)
       [[ $# -ge 2 ]] || fail "--brave-api-key requires a value"
       BRAVE_API_KEY_VALUE="${2:-}"
@@ -473,7 +532,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-ensure_host_dependencies
+if [[ -z "$SYNC_INSTANCE_DIR" ]]; then
+  ensure_host_dependencies
+fi
 
 if [[ "$INTERACTIVE" == "1" ]]; then
   if [[ ! -t 0 ]]; then
@@ -492,7 +553,11 @@ if [[ "$INTERACTIVE" == "1" ]]; then
   else
     WITH_WEIXIN=0
   fi
+  PRIMARY_MODEL_PROVIDER="$(normalize_primary_provider "$(prompt_required "Primary model provider (zai/codex)" "$(display_primary_provider "$PRIMARY_MODEL_PROVIDER")")")"
   ZAI_API_KEY_VALUE="$(prompt_optional "ZAI API key (optional)" "$ZAI_API_KEY_VALUE")"
+  OPENAI_API_KEY_VALUE="$(prompt_optional "Codex/OpenAI API key (optional)" "$OPENAI_API_KEY_VALUE")"
+  OPENAI_BASE_URL_VALUE="$(prompt_optional "Codex/OpenAI base URL (optional)" "$OPENAI_BASE_URL_VALUE")"
+  OPENAI_MODEL_VALUE="$(prompt_optional "Codex/OpenAI model" "$OPENAI_MODEL_VALUE")"
   BRAVE_API_KEY_VALUE="$(prompt_optional "Brave API key" "$BRAVE_API_KEY_VALUE")"
 
   echo ""
@@ -501,19 +566,30 @@ if [[ "$INTERACTIVE" == "1" ]]; then
   echo "  Gateway port: ${GATEWAY_PORT}"
   echo "  Bridge port: ${BRIDGE_PORT}"
   echo "  Weixin: $([[ "$WITH_WEIXIN" == "1" ]] && echo yes || echo no)"
+  echo "  Primary model provider: $(display_primary_provider "$PRIMARY_MODEL_PROVIDER")"
+  echo "  Codex/OpenAI model: ${OPENAI_MODEL_VALUE}"
+  echo "  Codex/OpenAI base URL: ${OPENAI_BASE_URL_VALUE:-<default>}"
   echo "  Auto weixin login: $([[ "$WITH_WEIXIN" == "1" && "$AUTO_WEIXIN_LOGIN" == "1" ]] && echo yes || echo no)"
   echo "  Instance dir: ${INSTANCES_BASE_DIR}/${INSTANCE_NAME}"
   echo ""
   prompt_yes_no "Continue" "Y" || exit 0
 fi
 
-[[ "$INSTANCE_NAME" =~ ^[A-Za-z0-9_.-]+$ ]] || fail "instance_name contains invalid characters"
-read -r GATEWAY_PORT BRIDGE_PORT < <(resolve_ports "$GATEWAY_PORT" "$BRIDGE_PORT")
+if [[ -z "$SYNC_INSTANCE_DIR" ]]; then
+  [[ "$INSTANCE_NAME" =~ ^[A-Za-z0-9_.-]+$ ]] || fail "instance_name contains invalid characters"
+  read -r GATEWAY_PORT BRIDGE_PORT < <(resolve_ports "$GATEWAY_PORT" "$BRIDGE_PORT")
 
-INSTANCE_DIR="${INSTANCES_BASE_DIR}/${INSTANCE_NAME}"
-STATE_DIR="${INSTANCE_DIR}/state"
-WORKSPACE_DIR="${INSTANCE_DIR}/workspace"
-TOKEN="$(openssl rand -hex 32)"
+  INSTANCE_DIR="${INSTANCES_BASE_DIR}/${INSTANCE_NAME}"
+  STATE_DIR="${INSTANCE_DIR}/state"
+  WORKSPACE_DIR="${INSTANCE_DIR}/workspace"
+  TOKEN="$(openssl rand -hex 32)"
+else
+  INSTANCE_DIR="$SYNC_INSTANCE_DIR"
+  STATE_DIR="${INSTANCE_DIR}/state"
+  WORKSPACE_DIR="${INSTANCE_DIR}/workspace"
+  TOKEN=""
+fi
+
 CREATED_INSTANCE_DIR=0
 CREATE_COMPLETED=0
 
@@ -554,10 +630,34 @@ restart_gateway() {
 }
 
 write_config_json() {
-  node - "${STATE_DIR}/openclaw.json" <<'EOF'
+  node - "${STATE_DIR}/openclaw.json" "${INSTANCE_DIR}/.env" <<'EOF'
 const fs = require("fs");
 
 const path = process.argv[2];
+const envPath = process.argv[3];
+const env = {};
+
+for (const rawLine of fs.readFileSync(envPath, "utf8").split(/\r?\n/)) {
+  const line = rawLine.trim();
+  if (!line || line.startsWith("#")) {
+    continue;
+  }
+
+  const separatorIndex = rawLine.indexOf("=");
+  if (separatorIndex === -1) {
+    continue;
+  }
+
+  const key = rawLine.slice(0, separatorIndex).trim();
+  env[key] = rawLine.slice(separatorIndex + 1);
+}
+
+const primaryProvider = (env.OPENCLAW_PRIMARY_MODEL_PROVIDER || "zai").trim().toLowerCase();
+const openaiApiKey = env.OPENAI_API_KEY || "";
+const openaiBaseUrl = env.OPENAI_BASE_URL || "";
+const openaiModel = env.OPENAI_MODEL || "gpt-5.4";
+const enableOpenAI = Boolean(openaiApiKey || openaiBaseUrl || primaryProvider === "openai");
+
 const data = {
   auth: {
     profiles: {
@@ -570,7 +670,7 @@ const data = {
   agents: {
     defaults: {
       model: {
-        primary: "zai/glm-5-turbo",
+        primary: primaryProvider === "openai" ? `openai/${openaiModel}` : "zai/glm-5-turbo",
       },
       compaction: {
         mode: "safeguard",
@@ -603,6 +703,41 @@ const data = {
   },
 };
 
+if (enableOpenAI) {
+  data.auth.profiles["openai:default"] = {
+    provider: "openai",
+    mode: "api_key",
+  };
+  data.models = {
+    providers: {
+      openai: {
+        apiKey: "$OPENAI_API_KEY",
+        api: "openai-completions",
+        models: [
+          {
+            id: openaiModel,
+            name: openaiModel,
+            reasoning: true,
+            input: ["text"],
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+            },
+            contextWindow: 200000,
+            maxTokens: 8192,
+          },
+        ],
+      },
+    },
+  };
+
+  if (openaiBaseUrl) {
+    data.models.providers.openai.baseUrl = openaiBaseUrl;
+  }
+}
+
 fs.writeFileSync(path, JSON.stringify(data, null, 2) + "\n");
 EOF
 }
@@ -623,6 +758,19 @@ EOF
 sync_weixin_patches() {
   write_embedded_weixin_patches "$STATE_DIR"
 }
+
+if [[ -n "$SYNC_INSTANCE_DIR" ]]; then
+  INSTANCE_DIR="$SYNC_INSTANCE_DIR"
+  STATE_DIR="${INSTANCE_DIR}/state"
+
+  [[ -f "${INSTANCE_DIR}/.env" ]] || fail "Missing instance env file: ${INSTANCE_DIR}/.env"
+  [[ -d "$STATE_DIR" ]] || fail "Missing state directory: ${STATE_DIR}"
+  ensure_node_binary || fail "Missing dependency: node"
+
+  write_config_json
+  echo "Synced OpenClaw config: ${STATE_DIR}/openclaw.json"
+  exit 0
+fi
 
 if [[ -e "$INSTANCE_DIR" ]] && [[ -n "$(find "$INSTANCE_DIR" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
   fail "Instance directory already exists and is not empty: $INSTANCE_DIR"
@@ -645,6 +793,9 @@ services:
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
       ZAI_API_KEY: ${ZAI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
       BRAVE_API_KEY: ${BRAVE_API_KEY:-}
       TZ: ${OPENCLAW_TZ}
     volumes:
@@ -697,6 +848,9 @@ services:
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
       ZAI_API_KEY: ${ZAI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
       BRAVE_API_KEY: ${BRAVE_API_KEY:-}
       TZ: ${OPENCLAW_TZ}
     volumes:
@@ -719,7 +873,11 @@ OPENCLAW_BRIDGE_PORT=${BRIDGE_PORT}
 OPENCLAW_TZ=Asia/Hong_Kong
 OPENCLAW_CONFIG_DIR=${STATE_DIR}
 OPENCLAW_WORKSPACE_DIR=${WORKSPACE_DIR}
+OPENCLAW_PRIMARY_MODEL_PROVIDER=${PRIMARY_MODEL_PROVIDER}
 ZAI_API_KEY=${ZAI_API_KEY_VALUE}
+OPENAI_API_KEY=${OPENAI_API_KEY_VALUE}
+OPENAI_BASE_URL=${OPENAI_BASE_URL_VALUE}
+OPENAI_MODEL=${OPENAI_MODEL_VALUE}
 BRAVE_API_KEY=${BRAVE_API_KEY_VALUE}
 EOF
 
@@ -741,6 +899,8 @@ trap - ERR INT TERM
 echo "Created instance: ${INSTANCE_DIR}"
 echo "Gateway: 127.0.0.1:${GATEWAY_PORT}"
 echo "Bridge: 127.0.0.1:${BRIDGE_PORT}"
+echo "Primary model provider: $(display_primary_provider "$PRIMARY_MODEL_PROVIDER")"
+echo "Primary model: $([[ "$PRIMARY_MODEL_PROVIDER" == "openai" ]] && printf 'openai/%s' "$OPENAI_MODEL_VALUE" || printf 'zai/glm-5-turbo')"
 echo "Compose file: ${INSTANCE_DIR}/docker-compose.yml"
 echo "Create/start command for future use:"
 echo "  $(has_cmd docker-compose && printf 'docker-compose' || printf 'docker compose') -f ${INSTANCE_DIR}/docker-compose.yml up -d"
