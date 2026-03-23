@@ -21,6 +21,35 @@ prompt() {
   fi
 }
 
+mask_secret() {
+  local value="${1:-}"
+  local length="${#value}"
+
+  if [[ -z "$value" ]]; then
+    printf '\n'
+  elif (( length <= 8 )); then
+    printf '********\n'
+  else
+    printf '%s...%s\n' "${value:0:4}" "${value: -4}"
+  fi
+}
+
+prompt_secret() {
+  local message="$1"
+  local default_value="${2:-}"
+  local masked_default=""
+  local value
+
+  if [[ -n "$default_value" ]]; then
+    masked_default="$(mask_secret "$default_value")"
+    read -r -p "${message} [${masked_default}]: " value
+    printf '%s' "${value:-$default_value}"
+  else
+    read -r -p "${message}: " value
+    printf '%s' "$value"
+  fi
+}
+
 normalize_primary_provider() {
   local value
   value="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
@@ -133,22 +162,26 @@ ensure_instance() {
   fi
 
   echo "实例 ${INSTANCE_NAME} 不存在，将先创建。"
-  local suggested_gateway_port suggested_bridge_port gateway_port bridge_port zai_api_key brave_api_key openai_api_key openai_base_url openai_model primary_model_provider
+  local suggested_gateway_port suggested_bridge_port gateway_port bridge_port zai_api_key zai_model brave_api_key openai_api_key openai_base_url openai_model primary_model_provider
   suggested_gateway_port="$(suggest_gateway_port)"
   suggested_bridge_port=$((suggested_gateway_port + DEFAULT_BRIDGE_OFFSET))
   gateway_port="$(prompt "Gateway 端口" "$suggested_gateway_port")"
   bridge_port="$(prompt "Bridge 端口" "$suggested_bridge_port")"
   primary_model_provider="$(normalize_primary_provider "$(prompt "主模型提供方（zai/openai）" "$(display_primary_provider "${OPENCLAW_PRIMARY_MODEL_PROVIDER:-zai}")")")"
-  zai_api_key="$(prompt "ZAI_API_KEY（可留空使用当前环境变量）" "${ZAI_API_KEY:-}")"
-  openai_api_key="$(prompt "OpenAI API key（可留空使用当前环境变量）" "${OPENAI_API_KEY:-${CODEX_API_KEY:-}}")"
+  zai_api_key="$(prompt_secret "ZAI_API_KEY（可留空使用当前环境变量）" "${ZAI_API_KEY:-}")"
+  zai_model="$(prompt "ZAI model" "${ZAI_MODEL:-glm-5-turbo}")"
+  openai_api_key="$(prompt_secret "OpenAI API key（可留空使用当前环境变量）" "${OPENAI_API_KEY:-${CODEX_API_KEY:-}}")"
   openai_base_url="$(prompt "OpenAI base URL（可留空）" "${OPENAI_BASE_URL:-${CODEX_BASE_URL:-}}")"
   openai_model="$(prompt "OpenAI model" "${OPENAI_MODEL:-${CODEX_MODEL:-gpt-5.4}}")"
-  brave_api_key="$(prompt "BRAVE_API_KEY（可留空使用当前环境变量）" "${BRAVE_API_KEY:-}")"
+  brave_api_key="$(prompt_secret "BRAVE_API_KEY（可留空使用当前环境变量）" "${BRAVE_API_KEY:-}")"
 
   local args=("$INSTANCE_NAME" "$gateway_port" "$bridge_port" --with-weixin --skip-weixin-login)
   args+=(--primary-model-provider "$primary_model_provider")
   if [[ -n "$zai_api_key" ]]; then
     args+=(--zai-api-key "$zai_api_key")
+  fi
+  if [[ -n "$zai_model" ]]; then
+    args+=(--zai-model "$zai_model")
   fi
   if [[ -n "$openai_api_key" ]]; then
     args+=(--openai-api-key "$openai_api_key")

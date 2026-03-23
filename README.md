@@ -44,6 +44,7 @@
 - `create-openclaw-instance.sh`
 - `weixin-login.sh`
 - `openclaw-stats.sh`
+- `set-openclaw-model.sh`
 
 默认安装位置是 `/usr/local/bin`，然后立即开始 OpenClaw 安装流程。
 
@@ -59,6 +60,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/LiukerSun/weixinbot/master/i
 bash <(curl -fsSL https://raw.githubusercontent.com/LiukerSun/weixinbot/master/install-openclaw.sh) \
   openclaw_demo auto auto \
   --primary-model-provider openai \
+  --zai-model "glm-5-turbo" \
   --openai-api-key "your_openai_api_key" \
   --openai-base-url "https://your-openai-compatible-endpoint/v1" \
   --openai-model "gpt-5.4" \
@@ -137,6 +139,7 @@ bash ./create-openclaw-instance.sh
 - 是否安装 `openclaw-weixin`
 - 默认主模型提供方（`zai` 或 `openai`）
 - `ZAI_API_KEY`
+- `ZAI model`
 - `OpenAI API key`
 - `OpenAI base URL`
 - `OpenAI model`
@@ -149,6 +152,7 @@ bash ./create-openclaw-instance.sh
 ```bash
 bash ./create-openclaw-instance.sh openclaw_demo auto auto \
   --primary-model-provider openai \
+  --zai-model "glm-5-turbo" \
   --openai-api-key "your_openai_api_key" \
   --openai-base-url "https://your-openai-compatible-endpoint/v1" \
   --openai-model "gpt-5.4" \
@@ -162,11 +166,53 @@ bash ./create-openclaw-instance.sh openclaw_demo auto auto \
 - 默认安装 `openclaw-weixin`
 - 默认主模型提供方是 `zai`
 - 如果要把默认模型切到 OpenAI-compatible，可加 `--primary-model-provider openai`
+- `ZAI` 模型支持 `--zai-model`
 - OpenAI-compatible 配置支持 `--openai-api-key`、`--openai-base-url`、`--openai-model`
 - 为兼容旧命令，`codex` / `--codex-*` 仍然可用，但推荐统一改用 `openai` / `--openai-*`
 - 默认在创建完成后自动尝试微信登录
 - 如果暂时不想拉起微信登录，可加 `--skip-weixin-login`
 - 如果不想安装微信插件，可加 `--without-weixin`
+
+## 调整已有实例模型
+
+如果实例已经存在，可以直接按实例名或容器名切换模型：
+
+```bash
+bash ./set-openclaw-model.sh openclaw_demo --model openai/gpt-5.4
+```
+
+如果你想用引导模式，直接不带参数执行即可。脚本会先列出当前运行中的实例供你选择，再按模型提供方分别提示参数：
+
+- `zai`：提示 `ZAI model`、`ZAI API key`
+- `openai`：提示 `OpenAI model`、`OpenAI API key`、`OpenAI base URL`
+
+```bash
+bash ./set-openclaw-model.sh
+```
+
+也可以直接传容器名：
+
+```bash
+bash ./set-openclaw-model.sh openclaw_demo_openclaw-gateway_1 --model zai/glm-4.5-air
+```
+
+如果需要同时更新 OpenAI-compatible 配置：
+
+```bash
+bash ./set-openclaw-model.sh openclaw_demo \
+  --primary-model-provider openai \
+  --openai-model "gpt-5.4" \
+  --openai-base-url "https://your-openai-compatible-endpoint/v1" \
+  --openai-api-key "your_openai_api_key"
+```
+
+这个脚本会自动：
+
+- 定位目标实例
+- 更新实例 `.env`
+- 重写 `docker-compose.yml` 和 `state/openclaw.json`
+- 在检测到相关容器存在时尝试重载 `openclaw-gateway`
+- 默认补一轮 smoke test，直接校验当前 provider 的 `API key`、`base URL`、`model` 是否可用；如果不想测试，可加 `--skip-test`
 
 ## 微信登录
 
@@ -259,6 +305,7 @@ bash ./create-openclaw-instance.sh <instance_name> <gateway_port|auto> <bridge_p
   [--skip-weixin-login] \
   [--primary-model-provider <zai|openai>] \
   [--zai-api-key <key>] \
+  [--zai-model <model>] \
   [--openai-api-key <key>] \
   [--openai-base-url <url>] \
   [--openai-model <model>] \
@@ -282,6 +329,13 @@ bash ./create-openclaw-instance.sh --sync-instance-config /root/openclaw-instanc
 
 ```bash
 bash ./weixin-login.sh <instance_name>
+```
+
+切换模型脚本：
+
+```bash
+bash ./set-openclaw-model.sh
+bash ./set-openclaw-model.sh <instance_name|container_name> --model <provider/model>
 ```
 
 统计脚本：
@@ -337,6 +391,7 @@ openclaw-stats.sh --json
 
 ```bash
 export ZAI_API_KEY="your_zai_api_key"
+export ZAI_MODEL="glm-5-turbo"
 export OPENAI_API_KEY="your_openai_api_key"
 export OPENAI_BASE_URL="https://your-openai-compatible-endpoint/v1"
 export OPENAI_MODEL="gpt-5.4"
@@ -352,6 +407,7 @@ bash ./create-openclaw-instance.sh
 
 ```bash
 export ZAI_API_KEY="your_zai_api_key"
+export ZAI_MODEL="glm-5-turbo"
 export OPENAI_API_KEY="your_codex_api_key"
 export OPENAI_BASE_URL="https://your-openai-compatible-endpoint/v1"
 export OPENAI_MODEL="gpt-5.4"
@@ -368,5 +424,5 @@ bash <(curl -fsSL https://raw.githubusercontent.com/LiukerSun/weixinbot/master/i
 - 创建过程失败时，脚本会自动清理未完成的半成品实例目录
 - 微信兼容补丁已经内嵌在脚本中，不需要单独同步源码补丁
 - `weixin-login.sh` 会按需启动临时 `openclaw-cli` 容器来安装插件或拉起登录
-- 现有实例如果想切换默认模型提供方，可直接修改对应实例的 `.env` 里的 `OPENCLAW_PRIMARY_MODEL_PROVIDER`、`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`，然后执行 `create-openclaw-instance.sh --sync-instance-config <instance_dir>`，最后重启网关
+- 现有实例如果想切换默认模型，优先使用 `set-openclaw-model.sh`；如果手动改 `.env`，至少要同步 `OPENCLAW_PRIMARY_MODEL_PROVIDER`、`ZAI_MODEL`、`OPENAI_MODEL`，并执行 `create-openclaw-instance.sh --sync-instance-config <instance_dir>`
 - `gateway.bind` 默认写为 `lan`，但端口映射仍然只绑定在宿主机 `127.0.0.1`
