@@ -82,24 +82,6 @@ export OPENCLAW_INSTALL_DIR="/root/.local/bin"
 bash <(curl -fsSL https://raw.githubusercontent.com/LiukerSun/weixinbot/master/install-openclaw.sh)
 ```
 
-## 一键统计
-
-如果你只想临时跑一次统计，不想先安装到本机，可以直接执行：
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/LiukerSun/weixinbot/master/run-openclaw-stats.sh)
-```
-
-参数会原样透传给 `openclaw-stats.sh`，例如：
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/LiukerSun/weixinbot/master/run-openclaw-stats.sh) \
-  --instance openclaw_demo \
-  --since 2026-03-01 \
-  --until 2026-03-31 \
-  --json
-```
-
 ## 获取脚本
 
 如果你不想走引导脚本，也可以只拉主安装脚本：
