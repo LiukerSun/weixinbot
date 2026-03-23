@@ -10,6 +10,7 @@
 - 支持引导式安装和参数安装
 - 自动探测未占用端口
 - 自动检查并安装宿主机依赖
+- 提供 `openclaw-stats.sh`，可汇总所有实例的模型与 token 用量
 - 实例统一创建到 `OPENCLAW_INSTANCES_DIR` 下
 - 创建完成后默认自动尝试微信登录并显示二维码
 - 不常驻创建 `openclaw-cli` 容器，只有安装插件或扫码登录时才临时运行
@@ -42,6 +43,7 @@
 
 - `create-openclaw-instance.sh`
 - `weixin-login.sh`
+- `openclaw-stats.sh`
 
 默认安装位置是 `/usr/local/bin`，然后立即开始 OpenClaw 安装流程。
 
@@ -199,6 +201,12 @@ docker ps -a | grep openclaw_demo
 docker logs -f openclaw_demo_openclaw-gateway_1
 ```
 
+查看所有实例的模型和 token 统计：
+
+```bash
+openclaw-stats.sh
+```
+
 ## 目录结构
 
 一个实例创建完成后，常见文件如下：
@@ -256,6 +264,55 @@ bash ./create-openclaw-instance.sh --sync-instance-config /root/openclaw-instanc
 
 ```bash
 bash ./weixin-login.sh <instance_name>
+```
+
+统计脚本：
+
+```bash
+bash ./openclaw-stats.sh [--instance <instance_name>] [--since <YYYY-MM-DD|ISO8601>] [--until <YYYY-MM-DD|ISO8601>] [--json]
+```
+
+## 数据统计
+
+`openclaw-stats.sh` 会扫描 `OPENCLAW_INSTANCES_DIR` 下每个实例的 `state` 目录，读取其中的 `jsonl` 运行记录，并在可用时通过 Docker 识别对应的 OpenClaw 容器状态，按实例和按模型汇总：
+
+- `provider/model`
+- `input` tokens
+- `output` tokens
+- `cacheRead` tokens
+- `cacheWrite` tokens
+- `totalTokens`
+- 产生 usage 的 assistant 消息次数
+- 每个实例匹配到的容器数量
+- `openclaw-gateway` 容器状态
+
+默认统计所有实例：
+
+```bash
+openclaw-stats.sh
+```
+
+只看单个实例：
+
+```bash
+openclaw-stats.sh --instance openclaw_demo
+```
+
+按时间范围过滤：
+
+```bash
+openclaw-stats.sh --since 2026-03-01 --until 2026-03-31
+```
+
+说明：
+
+- 只传 `YYYY-MM-DD` 时，会按宿主机本地时区取当天 `00:00:00.000` 到 `23:59:59.999`
+- 如果宿主机没有 `docker` 命令，或 Docker daemon 不可用，脚本会自动降级为只输出 usage 汇总，不影响 token 统计
+
+输出 JSON，方便接监控或二次处理：
+
+```bash
+openclaw-stats.sh --json
 ```
 
 也可以直接依赖环境变量：

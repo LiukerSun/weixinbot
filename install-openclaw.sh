@@ -8,6 +8,7 @@ INSTALL_DIR="${OPENCLAW_INSTALL_DIR:-/usr/local/bin}"
 RAW_BASE_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_REF}"
 CREATE_SCRIPT_NAME="create-openclaw-instance.sh"
 WEIXIN_LOGIN_SCRIPT_NAME="weixin-login.sh"
+STATS_SCRIPT_NAME="openclaw-stats.sh"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -54,10 +55,12 @@ main() {
 
   install_script "$CREATE_SCRIPT_NAME"
   install_script "$WEIXIN_LOGIN_SCRIPT_NAME"
+  install_script "$STATS_SCRIPT_NAME"
 
   echo "Installed scripts:"
   echo "  ${INSTALL_DIR}/${CREATE_SCRIPT_NAME}"
   echo "  ${INSTALL_DIR}/${WEIXIN_LOGIN_SCRIPT_NAME}"
+  echo "  ${INSTALL_DIR}/${STATS_SCRIPT_NAME}"
   echo ""
   exec "${INSTALL_DIR}/${CREATE_SCRIPT_NAME}" "$@"
 }
