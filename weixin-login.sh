@@ -152,10 +152,6 @@ sync_instance_config() {
   bash "${CREATE_SCRIPT}" --sync-instance-config "${INSTANCE_DIR}"
 }
 
-sync_weixin_patches() {
-  bash "${CREATE_SCRIPT}" --write-weixin-patches "${INSTANCE_DIR}/state"
-}
-
 ensure_instance() {
   if [[ -f "${INSTANCE_DIR}/docker-compose.yml" ]]; then
     return
@@ -210,7 +206,6 @@ restart_gateway() {
 
 ensure_weixin_plugin() {
   if compose run -T --rm --no-deps --entrypoint sh openclaw-cli -lc '[ -d /home/node/.openclaw/extensions/openclaw-weixin ]'; then
-    sync_weixin_patches
     sync_instance_config
     compose restart openclaw-gateway >/dev/null
     wait_for_gateway
@@ -219,7 +214,6 @@ ensure_weixin_plugin() {
 
   echo "正在安装微信插件..."
   compose run -T --rm openclaw-cli plugins install "@tencent-weixin/openclaw-weixin"
-  sync_weixin_patches
   sync_instance_config
   compose restart openclaw-gateway >/dev/null
   wait_for_gateway

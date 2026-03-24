@@ -239,9 +239,67 @@ write_embedded_weixin_patches() {
   weixin_accounts_patch_b64 | base64 -d | gzip -dc >"$target_accounts"
   weixin_channel_patch_b64 | base64 -d | gzip -dc >"$target_channel"
   weixin_process_message_patch_b64 | base64 -d | gzip -dc >"$target_process_message"
+  rewrite_weixin_sdk_imports "$extension_root"
 
   if grep -q 'openclaw/plugin-sdk/command-auth' "$target_process_message"; then
     fail "Weixin compatibility patch verification failed: forbidden command-auth import still present"
+  fi
+}
+
+rewrite_weixin_sdk_imports() {
+  local extension_root="$1"
+
+  ensure_node_binary || fail "Missing dependency: node"
+
+  node - "$extension_root" <<'EOF'
+const fs = require("fs");
+const path = require("path");
+
+const extensionRoot = process.argv[2];
+const replacements = [
+  ["openclaw/plugin-sdk/plugin-entry", "openclaw/plugin-sdk"],
+  ["openclaw/plugin-sdk/channel-config-schema", "openclaw/plugin-sdk"],
+  ["openclaw/plugin-sdk/infra-runtime", "openclaw/plugin-sdk"],
+  ["openclaw/plugin-sdk/reply-runtime", "openclaw/plugin-sdk"],
+  ["openclaw/plugin-sdk/text-runtime", "openclaw/plugin-sdk"],
+  ["openclaw/plugin-sdk/config-runtime", "openclaw/plugin-sdk"],
+  ["openclaw/plugin-sdk/channel-contract", "openclaw/plugin-sdk"],
+  ["openclaw/plugin-sdk/core", "openclaw/plugin-sdk"],
+];
+
+const targets = [];
+
+function walk(dir) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules") continue;
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      walk(fullPath);
+      continue;
+    }
+    if (entry.isFile() && /\.(?:[cm]?[jt]sx?)$/.test(entry.name)) {
+      targets.push(fullPath);
+    }
+  }
+}
+
+walk(extensionRoot);
+
+for (const filePath of targets) {
+  const original = fs.readFileSync(filePath, "utf8");
+  let next = original;
+  for (const [from, to] of replacements) {
+    next = next.split(from).join(to);
+  }
+  if (next !== original) {
+    fs.writeFileSync(filePath, next);
+  }
+}
+EOF
+
+  if grep -R -n --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --include='*.cjs' \
+    'openclaw/plugin-sdk/' "$extension_root" >/dev/null; then
+    fail "Weixin compatibility patch verification failed: unsupported plugin-sdk subpath import still present"
   fi
 }
 
@@ -783,6 +841,7 @@ const fs = require("fs");
 const path = process.argv[2];
 const envPath = process.argv[3];
 const env = {};
+let existing = {};
 
 for (const rawLine of fs.readFileSync(envPath, "utf8").split(/\r?\n/)) {
   const line = rawLine.trim();
@@ -797,6 +856,14 @@ for (const rawLine of fs.readFileSync(envPath, "utf8").split(/\r?\n/)) {
 
   const key = rawLine.slice(0, separatorIndex).trim();
   env[key] = rawLine.slice(separatorIndex + 1);
+}
+
+if (fs.existsSync(path)) {
+  try {
+    existing = JSON.parse(fs.readFileSync(path, "utf8"));
+  } catch {
+    existing = {};
+  }
 }
 
 const primaryProvider = (env.OPENCLAW_PRIMARY_MODEL_PROVIDER || "zai").trim().toLowerCase();
@@ -819,8 +886,11 @@ const resolvedOpenAiBaseUrl = normalizeOpenAiBaseUrl(openaiBaseUrl);
 const enableOpenAI = Boolean(openaiApiKey || openaiBaseUrl || primaryProvider === "openai");
 
 const data = {
+  ...existing,
   auth: {
+    ...(existing.auth || {}),
     profiles: {
+      ...((existing.auth && existing.auth.profiles) || {}),
       "zai:default": {
         provider: "zai",
         mode: "api_key",
@@ -828,25 +898,32 @@ const data = {
     },
   },
   agents: {
+    ...(existing.agents || {}),
     defaults: {
+      ...((existing.agents && existing.agents.defaults) || {}),
       model: {
+        ...((existing.agents && existing.agents.defaults && existing.agents.defaults.model) || {}),
         primary: primaryProvider === "openai" ? `openai/${openaiModel}` : `zai/${zaiModel}`,
       },
       compaction: {
+        ...((existing.agents && existing.agents.defaults && existing.agents.defaults.compaction) || {}),
         mode: "safeguard",
       },
     },
   },
   commands: {
+    ...(existing.commands || {}),
     native: "auto",
     nativeSkills: "auto",
     restart: true,
     ownerDisplay: "raw",
   },
   gateway: {
+    ...(existing.gateway || {}),
     mode: "local",
     bind: "lan",
     controlUi: {
+      ...((existing.gateway && existing.gateway.controlUi) || {}),
       allowedOrigins: [
         "http://localhost:18789",
         "http://127.0.0.1:18789",
@@ -854,8 +931,11 @@ const data = {
     },
   },
   tools: {
+    ...(existing.tools || {}),
     web: {
+      ...((existing.tools && existing.tools.web) || {}),
       search: {
+        ...((existing.tools && existing.tools.web && existing.tools.web.search) || {}),
         enabled: true,
         provider: "brave",
       },
@@ -869,7 +949,9 @@ if (enableOpenAI) {
     mode: "api_key",
   };
   data.models = {
+    ...(existing.models || {}),
     providers: {
+      ...((existing.models && existing.models.providers) || {}),
       openai: {
         apiKey: "$OPENAI_API_KEY",
         baseUrl: resolvedOpenAiBaseUrl,
@@ -917,6 +999,11 @@ sync_weixin_patches() {
   write_embedded_weixin_patches "$STATE_DIR"
 }
 
+repair_installed_weixin_plugin() {
+  sync_weixin_patches
+  configure_weixin_plugin
+}
+
 if [[ -n "$SYNC_INSTANCE_DIR" ]]; then
   INSTANCE_DIR="$SYNC_INSTANCE_DIR"
   STATE_DIR="${INSTANCE_DIR}/state"
@@ -927,6 +1014,9 @@ if [[ -n "$SYNC_INSTANCE_DIR" ]]; then
 
   write_compose_file
   write_config_json
+  if [[ -d "${STATE_DIR}/extensions/openclaw-weixin" ]]; then
+    repair_installed_weixin_plugin
+  fi
   echo "Synced OpenClaw compose: ${INSTANCE_DIR}/docker-compose.yml"
   echo "Synced OpenClaw config: ${STATE_DIR}/openclaw.json"
   exit 0
@@ -967,8 +1057,7 @@ wait_for_gateway
 
 if [[ "$WITH_WEIXIN" == "1" ]]; then
   compose run -T --rm openclaw-cli plugins install "@tencent-weixin/openclaw-weixin"
-  sync_weixin_patches
-  configure_weixin_plugin
+  repair_installed_weixin_plugin
   restart_gateway
 fi
 
