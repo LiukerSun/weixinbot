@@ -108,6 +108,16 @@ type InstanceView struct {
 	Actions        map[string]ActionHint `json:"actions"`
 }
 
+type ArchiveInfo struct {
+	ID          string `json:"id"`
+	Instance    string `json:"instance"`
+	ArchiveFile string `json:"archiveFile"`
+	ArchivePath string `json:"archivePath"`
+	ArchivedAt  string `json:"archivedAt"`
+	SizeBytes   int64  `json:"sizeBytes"`
+	Restorable  bool   `json:"restorable"`
+}
+
 type ActionHint struct {
 	Label  string `json:"label"`
 	Method string `json:"method"`
@@ -117,9 +127,11 @@ type ActionHint struct {
 type ListInstancesResponse struct {
 	GeneratedAt      string         `json:"generatedAt"`
 	Instances        []InstanceView `json:"instances"`
+	Archives         []ArchiveInfo  `json:"archives"`
 	Totals           UsageTotals    `json:"totals"`
 	ScannedInstances int            `json:"scannedInstances"`
 	QuotaConfigPath  string         `json:"quotaConfigPath"`
+	ArchivesDir      string         `json:"archivesDir"`
 }
 
 type QuotaUpdateRequest struct {

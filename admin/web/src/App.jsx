@@ -66,6 +66,21 @@ function formatRatio(value) {
   return `${(Number(value) * 100).toFixed(1)}%`;
 }
 
+function formatBytes(value) {
+  const size = Number(value || 0);
+  if (!Number.isFinite(size) || size <= 0) {
+    return "0 B";
+  }
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let index = 0;
+  let current = size;
+  while (current >= 1024 && index < units.length - 1) {
+    current /= 1024;
+    index += 1;
+  }
+  return `${current.toFixed(current >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
 function quotaValue(value) {
   if (value === "" || value == null) {
     return undefined;
@@ -196,6 +211,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [selectedInstance, setSelectedInstance] = useState(null);
+  const [createModalOpen, setCreateModalOpen] = useState(false);
   const [quotaForm, setQuotaForm] = useState(emptyQuotaForm);
   const [createForm, setCreateForm] = useState(emptyCreateForm);
   const [busyAction, setBusyAction] = useState("");
@@ -254,6 +270,58 @@ export default function App() {
     }
   }
 
+  async function archiveInstance(instance) {
+    const instanceName = instance.stats.instance;
+    const confirmed = window.confirm(
+      `确认归档并删除 ${instanceName} 吗？\n\n系统会先停止并删除该实例的所有容器，然后压缩实例目录，最后删除实例文件，但会保留压缩包备份。`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setBusyAction(`${instanceName}:archive`);
+    setNotice("");
+    setError("");
+    try {
+      await requestJSON(`/api/instances/${instanceName}/archive`, {
+        method: "POST",
+        body: "{}",
+      });
+      closeQuotaEditor();
+      setNotice(`${instanceName} 已归档，备份压缩包已保留`);
+      await loadInstances();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function restoreArchive(archive) {
+    const confirmed = window.confirm(
+      `确认从备份 ${archive.archiveFile} 恢复实例 ${archive.instance} 吗？\n\n系统会解压备份并重新启动该实例容器。`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setBusyAction(`archive:${archive.id}:restore`);
+    setNotice("");
+    setError("");
+    try {
+      await requestJSON(`/api/archives/${archive.id}/restore`, {
+        method: "POST",
+        body: "{}",
+      });
+      setNotice(`${archive.instance} 已从备份恢复`);
+      await loadInstances();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusyAction("");
+    }
+  }
+
   function openQuotaEditor(instance) {
     setSelectedInstance(instance);
     setQuotaForm({
@@ -266,6 +334,20 @@ export default function App() {
       validFrom: instance.quota.validity?.startDate || "",
       validUntil: instance.quota.validity?.endDate || "",
     });
+  }
+
+  function closeQuotaEditor() {
+    setSelectedInstance(null);
+    setQuotaForm(emptyQuotaForm);
+  }
+
+  function openCreateModal() {
+    setCreateModalOpen(true);
+  }
+
+  function closeCreateModal() {
+    setCreateModalOpen(false);
+    setCreateForm(emptyCreateForm);
   }
 
   async function submitQuota(event) {
@@ -287,7 +369,7 @@ export default function App() {
         body: JSON.stringify(buildQuotaPayload(quotaForm)),
       });
       setNotice(`${selectedInstance.stats.instance} 的额度已更新`);
-      setSelectedInstance(null);
+      closeQuotaEditor();
       await loadInstances();
     } catch (requestError) {
       setError(requestError.message);
@@ -345,7 +427,7 @@ export default function App() {
         method: "POST",
         body: JSON.stringify(payload),
       });
-      setCreateForm(emptyCreateForm);
+      closeCreateModal();
       setNotice("新实例已创建");
       await loadInstances();
     } catch (requestError) {
@@ -356,6 +438,7 @@ export default function App() {
   }
 
   const totals = data?.totals || {};
+  const archives = data?.archives || [];
   const activeCount =
     filteredInstances.filter((item) => item.stats.gatewayState === "running").length;
   const pausedCount =
@@ -373,6 +456,7 @@ export default function App() {
         </div>
 
         <div className="hero-actions">
+          <button onClick={openCreateModal}>创建实例</button>
           <button className="ghost-button" onClick={loadInstances} disabled={loading}>
             {loading ? "刷新中..." : "刷新数据"}
           </button>
@@ -387,19 +471,24 @@ export default function App() {
         <SummaryCard label="总 Tokens" value={formatNumber(totals.totalTokens)} accent="ink" />
       </section>
 
-      <section className="layout-grid">
+      <section className="layout-grid single-layout">
         <div className="panel panel-wide">
           <div className="panel-header">
             <div>
               <p className="panel-kicker">Usage Matrix</p>
               <h2>用户实例用量</h2>
             </div>
-            <input
-              className="search-input"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="搜索实例 / 模型 / 状态"
-            />
+            <div className="panel-tools">
+              <input
+                className="search-input"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="搜索实例 / 模型 / 状态"
+              />
+              <button className="ghost-button" onClick={openCreateModal}>
+                新建实例
+              </button>
+            </div>
           </div>
 
           {error ? <div className="banner error">{error}</div> : null}
@@ -496,7 +585,7 @@ export default function App() {
                       <td>
                         <div className="action-row">
                           <button disabled={isBusy} onClick={() => openQuotaEditor(instance)}>
-                            额度
+                            编辑
                           </button>
                           <button disabled={isBusy} onClick={() => runInstanceAction(name, "pause")}>
                             暂停
@@ -516,255 +605,356 @@ export default function App() {
             </table>
           </div>
         </div>
+      </section>
 
-        <div className="side-column">
-          <section className="panel">
-            <div className="panel-header">
-              <div>
-                <p className="panel-kicker">Quota Desk</p>
-                <h2>额度操作</h2>
+      <section className="panel archive-panel">
+        <div className="panel-header">
+          <div>
+            <p className="panel-kicker">Archives</p>
+            <h2>备份归档</h2>
+          </div>
+          <div className="quota-file">Archives: {data?.archivesDir || "-"}</div>
+        </div>
+
+        <div className="table-wrap">
+          <table className="instance-table">
+            <thead>
+              <tr>
+                <th>实例</th>
+                <th>压缩包</th>
+                <th>归档时间</th>
+                <th>大小</th>
+                <th>路径</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {archives.length === 0 ? (
+                <tr>
+                  <td colSpan="6">
+                    <div className="empty-state">当前还没有归档备份。</div>
+                  </td>
+                </tr>
+              ) : (
+                archives.map((archive) => {
+                  const isBusy = busyAction === `archive:${archive.id}:restore`;
+                  return (
+                    <tr key={archive.id}>
+                      <td>
+                        <div className="cell-title">{archive.instance}</div>
+                      </td>
+                      <td>
+                        <div className="cell-title">{archive.archiveFile}</div>
+                      </td>
+                      <td>
+                        <div className="cell-title">{archive.archivedAt || "-"}</div>
+                      </td>
+                      <td>
+                        <div className="cell-title">{formatBytes(archive.sizeBytes)}</div>
+                      </td>
+                      <td>
+                        <div className="cell-subtitle archive-path">{archive.archivePath}</div>
+                      </td>
+                      <td>
+                        <div className="action-row archive-actions">
+                          <button
+                            disabled={isBusy || !archive.restorable}
+                            onClick={() => restoreArchive(archive)}
+                          >
+                            恢复
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {selectedInstance ? (
+        <ModalShell
+          title={`编辑额度 · ${selectedInstance.stats.instance}`}
+          kicker="Quota Editor"
+          onClose={closeQuotaEditor}
+        >
+          <form className="stack-form" onSubmit={submitQuota}>
+            <div className="selected-instance">
+              <div className="cell-title">{selectedInstance.stats.instance}</div>
+              <div className="cell-subtitle">
+                当前日额度 {formatNumber(selectedInstance.quota.limits.daily || 0)}，月额度 {formatNumber(selectedInstance.quota.limits.monthly || 0)}
+              </div>
+              <div className="cell-subtitle">
+                {formatValidityTitle(selectedInstance.quota.validity)} · {formatValiditySubtitle(selectedInstance.quota.validity)}
               </div>
             </div>
 
-            {selectedInstance ? (
-              <form className="stack-form" onSubmit={submitQuota}>
-                <div className="selected-instance">
-                  <div className="cell-title">{selectedInstance.stats.instance}</div>
-                  <div className="cell-subtitle">
-                    当前日额度 {formatNumber(selectedInstance.quota.limits.daily || 0)}，月额度 {formatNumber(selectedInstance.quota.limits.monthly || 0)}
-                  </div>
-                  <div className="cell-subtitle">
-                    {formatValidityTitle(selectedInstance.quota.validity)} · {formatValiditySubtitle(selectedInstance.quota.validity)}
-                  </div>
+            <label>
+              <span>更新方式</span>
+              <select
+                value={quotaForm.mode}
+                onChange={(event) => setQuotaForm((prev) => ({ ...prev, mode: event.target.value }))}
+              >
+                <option value="add">增加额度</option>
+                <option value="set">直接设置</option>
+              </select>
+            </label>
+
+            <div className="three-columns">
+              <label>
+                <span>日额度</span>
+                <input
+                  value={quotaForm.daily}
+                  onChange={(event) => setQuotaForm((prev) => ({ ...prev, daily: event.target.value }))}
+                  placeholder="例如 50000"
+                />
+              </label>
+              <label>
+                <span>月额度</span>
+                <input
+                  value={quotaForm.monthly}
+                  onChange={(event) => setQuotaForm((prev) => ({ ...prev, monthly: event.target.value }))}
+                  placeholder="例如 1000000"
+                />
+              </label>
+              <label>
+                <span>历史总额度</span>
+                <input
+                  value={quotaForm.total}
+                  onChange={(event) => setQuotaForm((prev) => ({ ...prev, total: event.target.value }))}
+                  placeholder="可选"
+                />
+              </label>
+            </div>
+
+            <div className="two-columns">
+              <label>
+                <span>开始日期</span>
+                <input
+                  type="date"
+                  value={quotaForm.validFrom}
+                  onChange={(event) => setQuotaForm((prev) => ({ ...prev, validFrom: event.target.value }))}
+                />
+              </label>
+              <label>
+                <span>截止日期</span>
+                <input
+                  type="date"
+                  value={quotaForm.validUntil}
+                  onChange={(event) => setQuotaForm((prev) => ({ ...prev, validUntil: event.target.value }))}
+                />
+              </label>
+            </div>
+            <div className="field-note">
+              按开始日期滚动重置月额度。例如 2026-01-02 开始，则 2026-02-02 重置。开始和截止日期现在可以自由设置，只要求截止日期晚于开始日期。
+            </div>
+
+            <div className="two-columns">
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={quotaForm.disabled}
+                  onChange={(event) => setQuotaForm((prev) => ({ ...prev, disabled: event.target.checked }))}
+                />
+                <span>禁用该实例的限额</span>
+              </label>
+
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={quotaForm.resumeWhenWithinLimit}
+                  onChange={(event) =>
+                    setQuotaForm((prev) => ({
+                      ...prev,
+                      resumeWhenWithinLimit: event.target.checked,
+                    }))
+                  }
+                />
+                <span>窗口恢复后自动恢复容器</span>
+              </label>
+            </div>
+
+            <div className="form-actions">
+              <button type="submit" disabled={busyAction.endsWith(":quota")}>
+                保存额度
+              </button>
+              <button type="button" className="ghost-button" onClick={closeQuotaEditor}>
+                取消
+              </button>
+            </div>
+
+            <div className="danger-zone">
+              <div>
+                <div className="cell-title">归档删除</div>
+                <div className="cell-subtitle">
+                  会停止并删除该实例所有容器，压缩实例目录后再删除原始文件，压缩包会保留在归档列表中。
                 </div>
+              </div>
+              <button
+                type="button"
+                className="danger-button"
+                disabled={busyAction === `${selectedInstance.stats.instance}:archive`}
+                onClick={() => archiveInstance(selectedInstance)}
+              >
+                归档并删除
+              </button>
+            </div>
+          </form>
+        </ModalShell>
+      ) : null}
 
-                <label>
-                  <span>更新方式</span>
-                  <select
-                    value={quotaForm.mode}
-                    onChange={(event) => setQuotaForm((prev) => ({ ...prev, mode: event.target.value }))}
-                  >
-                    <option value="add">增加额度</option>
-                    <option value="set">直接设置</option>
-                  </select>
-                </label>
+      {createModalOpen ? (
+        <ModalShell
+          title="创建用户实例"
+          kicker="Provisioning"
+          onClose={closeCreateModal}
+          wide
+        >
+          <form className="stack-form" onSubmit={submitCreateInstance}>
+            <label>
+              <span>实例名</span>
+              <input
+                required
+                value={createForm.name}
+                onChange={(event) => setCreateForm((prev) => ({ ...prev, name: event.target.value }))}
+                placeholder="例如 user_zhangsan"
+              />
+            </label>
 
-                <label>
-                  <span>日额度</span>
-                  <input
-                    value={quotaForm.daily}
-                    onChange={(event) => setQuotaForm((prev) => ({ ...prev, daily: event.target.value }))}
-                    placeholder="例如 50000"
-                  />
-                </label>
+            <div className="two-columns">
+              <label>
+                <span>Gateway 端口</span>
+                <input
+                  value={createForm.gatewayPort}
+                  onChange={(event) => setCreateForm((prev) => ({ ...prev, gatewayPort: event.target.value }))}
+                />
+              </label>
+              <label>
+                <span>Bridge 端口</span>
+                <input
+                  value={createForm.bridgePort}
+                  onChange={(event) => setCreateForm((prev) => ({ ...prev, bridgePort: event.target.value }))}
+                />
+              </label>
+            </div>
 
-                <label>
-                  <span>月额度</span>
-                  <input
-                    value={quotaForm.monthly}
-                    onChange={(event) => setQuotaForm((prev) => ({ ...prev, monthly: event.target.value }))}
-                    placeholder="例如 1000000"
-                  />
-                </label>
+            <label>
+              <span>主模型提供方</span>
+              <select
+                value={createForm.primaryModelProvider}
+                onChange={(event) =>
+                  setCreateForm((prev) => ({ ...prev, primaryModelProvider: event.target.value }))
+                }
+              >
+                <option value="openai">openai</option>
+                <option value="zai">zai</option>
+              </select>
+            </label>
 
-                <label>
-                  <span>历史总额度</span>
-                  <input
-                    value={quotaForm.total}
-                    onChange={(event) => setQuotaForm((prev) => ({ ...prev, total: event.target.value }))}
-                    placeholder="可选"
-                  />
-                </label>
-
+            {createForm.primaryModelProvider === "openai" ? (
+              <>
                 <div className="two-columns">
                   <label>
-                    <span>开始日期</span>
+                    <span>OpenAI 模型</span>
                     <input
-                      type="date"
-                      value={quotaForm.validFrom}
-                      onChange={(event) => setQuotaForm((prev) => ({ ...prev, validFrom: event.target.value }))}
+                      value={createForm.openaiModel}
+                      onChange={(event) => setCreateForm((prev) => ({ ...prev, openaiModel: event.target.value }))}
                     />
                   </label>
                   <label>
-                    <span>截止日期</span>
+                    <span>OpenAI API Key</span>
                     <input
-                      type="date"
-                      value={quotaForm.validUntil}
-                      onChange={(event) => setQuotaForm((prev) => ({ ...prev, validUntil: event.target.value }))}
+                      value={createForm.openaiApiKey}
+                      onChange={(event) => setCreateForm((prev) => ({ ...prev, openaiApiKey: event.target.value }))}
                     />
                   </label>
                 </div>
-                <div className="field-note">
-                  按开始日期滚动重置月额度。例如 2026-01-02 开始，则 2026-02-02 重置。开始和截止日期现在可以自由设置，只要求截止日期晚于开始日期。
-                </div>
 
-                <label className="checkbox-row">
+                <label>
+                  <span>OpenAI Base URL</span>
                   <input
-                    type="checkbox"
-                    checked={quotaForm.disabled}
-                    onChange={(event) => setQuotaForm((prev) => ({ ...prev, disabled: event.target.checked }))}
+                    value={createForm.openaiBaseUrl}
+                    onChange={(event) => setCreateForm((prev) => ({ ...prev, openaiBaseUrl: event.target.value }))}
                   />
-                  <span>禁用该实例的限额</span>
                 </label>
-
-                <label className="checkbox-row">
-                  <input
-                    type="checkbox"
-                    checked={quotaForm.resumeWhenWithinLimit}
-                    onChange={(event) =>
-                      setQuotaForm((prev) => ({
-                        ...prev,
-                        resumeWhenWithinLimit: event.target.checked,
-                      }))
-                    }
-                  />
-                  <span>窗口恢复后自动恢复容器</span>
-                </label>
-
-                <div className="form-actions">
-                  <button type="submit" disabled={busyAction.endsWith(":quota")}>
-                    保存额度
-                  </button>
-                  <button type="button" className="ghost-button" onClick={() => setSelectedInstance(null)}>
-                    取消
-                  </button>
-                </div>
-              </form>
+              </>
             ) : (
-              <div className="empty-state">
-                从左侧选择一个实例后，可以直接增加 token 额度，或改成固定额度。
+              <div className="two-columns">
+                <label>
+                  <span>ZAI 模型</span>
+                  <input
+                    value={createForm.zaiModel}
+                    onChange={(event) => setCreateForm((prev) => ({ ...prev, zaiModel: event.target.value }))}
+                  />
+                </label>
+                <label>
+                  <span>ZAI API Key</span>
+                  <input
+                    value={createForm.zaiApiKey}
+                    onChange={(event) => setCreateForm((prev) => ({ ...prev, zaiApiKey: event.target.value }))}
+                  />
+                </label>
               </div>
             )}
-          </section>
 
-          <section className="panel">
-            <div className="panel-header">
-              <div>
-                <p className="panel-kicker">Provisioning</p>
-                <h2>创建用户实例</h2>
-              </div>
+            <label>
+              <span>BraveSearch API Key</span>
+              <input
+                value={createForm.braveApiKey}
+                onChange={(event) => setCreateForm((prev) => ({ ...prev, braveApiKey: event.target.value }))}
+                placeholder="可选"
+              />
+            </label>
+
+            <div className="three-columns">
+              <label>
+                <span>初始日额度</span>
+                <input
+                  value={createForm.quotaDaily}
+                  onChange={(event) => setCreateForm((prev) => ({ ...prev, quotaDaily: event.target.value }))}
+                />
+              </label>
+              <label>
+                <span>初始月额度</span>
+                <input
+                  value={createForm.quotaMonthly}
+                  onChange={(event) => setCreateForm((prev) => ({ ...prev, quotaMonthly: event.target.value }))}
+                />
+              </label>
+              <label>
+                <span>历史总额度</span>
+                <input
+                  value={createForm.quotaTotal}
+                  onChange={(event) => setCreateForm((prev) => ({ ...prev, quotaTotal: event.target.value }))}
+                />
+              </label>
             </div>
 
-            <form className="stack-form" onSubmit={submitCreateInstance}>
+            <div className="two-columns">
               <label>
-                <span>实例名</span>
+                <span>开始日期</span>
                 <input
-                  required
-                  value={createForm.name}
-                  onChange={(event) => setCreateForm((prev) => ({ ...prev, name: event.target.value }))}
-                  placeholder="例如 user_zhangsan"
+                  type="date"
+                  value={createForm.quotaValidFrom}
+                  onChange={(event) => setCreateForm((prev) => ({ ...prev, quotaValidFrom: event.target.value }))}
                 />
               </label>
-
-              <div className="two-columns">
-                <label>
-                  <span>Gateway 端口</span>
-                  <input
-                    value={createForm.gatewayPort}
-                    onChange={(event) => setCreateForm((prev) => ({ ...prev, gatewayPort: event.target.value }))}
-                  />
-                </label>
-                <label>
-                  <span>Bridge 端口</span>
-                  <input
-                    value={createForm.bridgePort}
-                    onChange={(event) => setCreateForm((prev) => ({ ...prev, bridgePort: event.target.value }))}
-                  />
-                </label>
-              </div>
-
               <label>
-                <span>主模型提供方</span>
-                <select
-                  value={createForm.primaryModelProvider}
-                  onChange={(event) =>
-                    setCreateForm((prev) => ({ ...prev, primaryModelProvider: event.target.value }))
-                  }
-                >
-                  <option value="openai">openai</option>
-                  <option value="zai">zai</option>
-                </select>
-              </label>
-
-              <label>
-                <span>OpenAI 模型</span>
+                <span>截止日期</span>
                 <input
-                  value={createForm.openaiModel}
-                  onChange={(event) => setCreateForm((prev) => ({ ...prev, openaiModel: event.target.value }))}
+                  type="date"
+                  value={createForm.quotaValidUntil}
+                  onChange={(event) => setCreateForm((prev) => ({ ...prev, quotaValidUntil: event.target.value }))}
                 />
               </label>
+            </div>
+            <div className="field-note">
+              月额度会按开始日期滚动重置。比如开始日期是 1 月 2 日，就会在 2 月 2 日进入下一个月度周期。
+            </div>
 
-              <label>
-                <span>OpenAI API Key</span>
-                <input
-                  value={createForm.openaiApiKey}
-                  onChange={(event) => setCreateForm((prev) => ({ ...prev, openaiApiKey: event.target.value }))}
-                />
-              </label>
-
-              <label>
-                <span>OpenAI Base URL</span>
-                <input
-                  value={createForm.openaiBaseUrl}
-                  onChange={(event) => setCreateForm((prev) => ({ ...prev, openaiBaseUrl: event.target.value }))}
-                />
-              </label>
-
-              <label>
-                <span>ZAI 模型</span>
-                <input
-                  value={createForm.zaiModel}
-                  onChange={(event) => setCreateForm((prev) => ({ ...prev, zaiModel: event.target.value }))}
-                />
-              </label>
-
-              <label>
-                <span>ZAI API Key</span>
-                <input
-                  value={createForm.zaiApiKey}
-                  onChange={(event) => setCreateForm((prev) => ({ ...prev, zaiApiKey: event.target.value }))}
-                />
-              </label>
-
-              <div className="two-columns">
-                <label>
-                  <span>初始日额度</span>
-                  <input
-                    value={createForm.quotaDaily}
-                    onChange={(event) => setCreateForm((prev) => ({ ...prev, quotaDaily: event.target.value }))}
-                  />
-                </label>
-                <label>
-                  <span>初始月额度</span>
-                  <input
-                    value={createForm.quotaMonthly}
-                    onChange={(event) => setCreateForm((prev) => ({ ...prev, quotaMonthly: event.target.value }))}
-                  />
-                </label>
-              </div>
-
-              <div className="two-columns">
-                <label>
-                  <span>开始日期</span>
-                  <input
-                    type="date"
-                    value={createForm.quotaValidFrom}
-                    onChange={(event) => setCreateForm((prev) => ({ ...prev, quotaValidFrom: event.target.value }))}
-                  />
-                </label>
-                <label>
-                  <span>截止日期</span>
-                  <input
-                    type="date"
-                    value={createForm.quotaValidUntil}
-                    onChange={(event) => setCreateForm((prev) => ({ ...prev, quotaValidUntil: event.target.value }))}
-                  />
-                </label>
-              </div>
-              <div className="field-note">
-                月额度会按开始日期滚动重置。比如开始日期是 1 月 2 日，就会在 2 月 2 日进入下一个月度周期；开始和截止日期不再要求整月对齐。
-              </div>
-
+            <div className="two-columns">
               <label className="checkbox-row">
                 <input
                   type="checkbox"
@@ -784,16 +974,19 @@ export default function App() {
                 />
                 <span>创建后不自动拉起微信登录</span>
               </label>
+            </div>
 
-              <div className="form-actions">
-                <button type="submit" disabled={busyAction === "create-instance"}>
-                  创建实例
-                </button>
-              </div>
-            </form>
-          </section>
-        </div>
-      </section>
+            <div className="form-actions">
+              <button type="submit" disabled={busyAction === "create-instance"}>
+                创建实例
+              </button>
+              <button type="button" className="ghost-button" onClick={closeCreateModal}>
+                取消
+              </button>
+            </div>
+          </form>
+        </ModalShell>
+      ) : null}
     </div>
   );
 }
@@ -809,4 +1002,26 @@ function SummaryCard({ label, value, accent }) {
 
 function StatusBadge({ text, tone }) {
   return <span className={`status-badge tone-${tone}`}>{text}</span>;
+}
+
+function ModalShell({ kicker, title, children, onClose, wide = false }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div
+        className={`modal-card${wide ? " modal-card-wide" : ""}`}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="modal-header">
+          <div>
+            <p className="panel-kicker">{kicker}</p>
+            <h2>{title}</h2>
+          </div>
+          <button type="button" className="ghost-button modal-close" onClick={onClose}>
+            关闭
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
 }

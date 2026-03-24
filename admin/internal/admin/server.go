@@ -40,6 +40,8 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("/api/healthz", s.handleHealthz)
+	s.mux.HandleFunc("/api/archives", s.handleArchives)
+	s.mux.HandleFunc("/api/archives/", s.handleArchiveActions)
 	s.mux.HandleFunc("/api/instances", s.handleInstances)
 	s.mux.HandleFunc("/api/instances/", s.handleInstanceActions)
 	s.mux.Handle("/", s.handleFrontend())
@@ -50,6 +52,60 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 		"ok":        true,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	})
+}
+
+func (s *Server) handleArchives(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	archives, err := s.listArchives()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"generatedAt": time.Now().UTC().Format(time.RFC3339),
+		"archives":    archives,
+		"archivesDir": s.cfg.ArchivesDir,
+	})
+}
+
+func (s *Server) handleArchiveActions(w http.ResponseWriter, r *http.Request) {
+	pathValue := strings.TrimPrefix(r.URL.Path, "/api/archives/")
+	pathValue = strings.Trim(pathValue, "/")
+	if pathValue == "" {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	parts := strings.Split(pathValue, "/")
+	if len(parts) != 2 || r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var (
+		result any
+		err    error
+	)
+
+	switch parts[1] {
+	case "restore":
+		result, err = s.restoreArchive(r.Context(), parts[0])
+	default:
+		http.NotFound(w, r)
+		return
+	}
+
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
@@ -121,6 +177,8 @@ func (s *Server) handleInstanceActions(w http.ResponseWriter, r *http.Request) {
 		result, err = s.instanceComposeAction(r.Context(), instanceName, "up", "-d", "openclaw-gateway")
 	case "restart":
 		result, err = s.instanceComposeAction(r.Context(), instanceName, "restart", "openclaw-gateway")
+	case "archive":
+		result, err = s.archiveInstance(r.Context(), instanceName)
 	case "quota":
 		var request QuotaUpdateRequest
 		if err = decodeJSONBody(r, &request); err == nil {
@@ -149,13 +207,19 @@ func (s *Server) buildInstancesResponse(ctx context.Context) (ListInstancesRespo
 	if err != nil {
 		return ListInstancesResponse{}, err
 	}
+	archives, err := s.listArchives()
+	if err != nil {
+		return ListInstancesResponse{}, err
+	}
 
 	response := ListInstancesResponse{
 		GeneratedAt:      time.Now().UTC().Format(time.RFC3339),
 		Instances:        make([]InstanceView, 0, len(stats.Instances)),
+		Archives:         archives,
 		Totals:           stats.Totals,
 		ScannedInstances: stats.ScannedInstances,
 		QuotaConfigPath:  s.cfg.QuotaConfig,
+		ArchivesDir:      s.cfg.ArchivesDir,
 	}
 
 	for _, instance := range stats.Instances {
@@ -250,6 +314,7 @@ func (s *Server) composeInstanceView(ctx context.Context, instance InstanceStats
 			"pause":   {Label: "Pause", Method: "POST", Path: fmt.Sprintf("/api/instances/%s/pause", instance.Instance)},
 			"resume":  {Label: "Resume", Method: "POST", Path: fmt.Sprintf("/api/instances/%s/resume", instance.Instance)},
 			"restart": {Label: "Restart", Method: "POST", Path: fmt.Sprintf("/api/instances/%s/restart", instance.Instance)},
+			"archive": {Label: "Archive", Method: "POST", Path: fmt.Sprintf("/api/instances/%s/archive", instance.Instance)},
 			"quota":   {Label: "Quota", Method: "POST", Path: fmt.Sprintf("/api/instances/%s/quota", instance.Instance)},
 		},
 	}, nil

@@ -12,6 +12,7 @@ type Config struct {
 	ListenAddr     string
 	InstancesDir   string
 	QuotaConfig    string
+	ArchivesDir    string
 	ScriptsDir     string
 	WebDistDir     string
 	AllowedOrigins []string
@@ -32,6 +33,7 @@ func LoadConfig() (Config, error) {
 
 	instancesDir := envOrDefault("OPENCLAW_INSTANCES_DIR", "/root/openclaw-instances")
 	quotaConfig := envOrDefault("OPENCLAW_QUOTA_CONFIG", filepath.Join(instancesDir, "quota-config.json"))
+	archivesDir := envOrDefault("OPENCLAW_ARCHIVES_DIR", filepath.Join(instancesDir, "_archives"))
 	adminUsername := envOrDefault("OPENCLAW_ADMIN_USERNAME", "admin")
 	adminPassword := strings.TrimSpace(os.Getenv("OPENCLAW_ADMIN_PASSWORD"))
 	if adminPassword == "" {
@@ -42,6 +44,7 @@ func LoadConfig() (Config, error) {
 		ListenAddr:     envOrDefault("OPENCLAW_ADMIN_LISTEN", ":8088"),
 		InstancesDir:   instancesDir,
 		QuotaConfig:    quotaConfig,
+		ArchivesDir:    archivesDir,
 		ScriptsDir:     scriptsDir,
 		WebDistDir:     webDistDir,
 		AllowedOrigins: splitAndTrim(envOrDefault("OPENCLAW_ADMIN_ALLOWED_ORIGINS", "http://127.0.0.1:5173,http://localhost:5173")),
