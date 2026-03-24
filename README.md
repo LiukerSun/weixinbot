@@ -467,7 +467,9 @@ cp ./openclaw-quota-config.example.json /root/openclaw-instances/quota-config.js
       "limits": {
         "daily": 500000,
         "monthly": 10000000
-      }
+      },
+      "validFrom": "2026-01-02",
+      "validUntil": "2026-04-15"
     },
     "openclaw_total_cap": {
       "limits": {
@@ -482,11 +484,12 @@ cp ./openclaw-quota-config.example.json /root/openclaw-instances/quota-config.js
 字段说明：
 
 - `daily`：按当天累计 token 限额
-- `monthly`：按当月累计 token 限额
-- `total`：按实例历史累计 token 限额
+- `monthly`：按月度周期累计 token 限额；如果配置了 `validFrom`，则月度周期按开始日期滚动重置，例如 `2026-01-02` 开始，则在 `2026-02-02` 重置
+- `total`：按有效期起点以来的累计 token 限额；如果未配置有效期，则按实例历史累计
 - `stopServices`：超限后要停止的 Compose 服务，默认是 `openclaw-gateway`
 - `resumeWhenWithinLimit`：如果超限窗口恢复到阈值以内，是否自动重新 `up -d`
 - `disabled`：禁用某个实例的限额控制
+- `validFrom` / `validUntil`：额度有效期，必须成对出现，且 `validUntil` 必须晚于 `validFrom`
 
 先做一次演练，不实际停容器：
 
@@ -511,8 +514,10 @@ openclaw-quota-control.sh daemon \
 行为说明：
 
 - 当某个实例命中任意已配置阈值时，脚本会执行 `docker compose stop openclaw-gateway`
+- 如果配置了 `validFrom` / `validUntil`，实例只会在这个区间内可用；未到开始日期或已经过期时，也会被 quota controller 自动暂停
 - 状态会写入实例目录下的 `state/quota-controller.json`
-- 如果只配置了 `daily` / `monthly`，并且 `resumeWhenWithinLimit=true`，到新的一天或新的一月后，controller 会自动恢复实例
+- 如果配置了 `monthly` 且带有效期，月额度会按开始日期的月度周期滚动重置，不按自然月重置
+- 如果只配置了 `daily` / `monthly`，并且 `resumeWhenWithinLimit=true`，到新的一天或进入下一个月度周期后，controller 会自动恢复实例
 - 如果配置了 `total` 历史总量阈值，通常不会自动恢复，除非你提高阈值或改配置
 - `openclaw-monitor.sh` 在传入同一份 quota 配置时，会同时导出 quota 相关指标
 
@@ -528,8 +533,10 @@ openclaw-quota-control.sh daemon \
 - 查看所有用户实例的 token 用量
 - 查看每个实例的 `gateway` 状态、quota 状态、最近使用模型
 - 直接给某个用户实例增加额度或重设额度
+- 给某个用户实例设置任意开始日期、截止日期，以及按开始日期滚动的月度重置周期
 - 直接暂停、恢复、重启某个用户实例容器
 - 直接创建新的用户实例
+- quota 超额后由后台 daemon 自动停止实例容器，不只是前端显示 `limit hit`
 
 ### 后端接口
 
@@ -610,6 +617,43 @@ go run ./admin/cmd/openclaw-admin
 ```text
 http://127.0.0.1:8088
 ```
+
+### Docker 部署管理后台
+
+仓库根目录已经提供：
+
+- `Dockerfile.admin`
+- `docker-compose.admin.yml`
+
+其中包含两个服务：
+
+- `openclaw-admin`：管理后台 Web/API
+- `openclaw-quota-daemon`：常驻执行 quota 检查，超额后自动停止 `openclaw-gateway`
+
+直接启动：
+
+```bash
+cd /root/weixinbot
+docker compose -f docker-compose.admin.yml up -d --build
+```
+
+默认映射端口：
+
+- `2052`
+- `39188`
+
+默认后台认证：
+
+- 用户名：`admin`
+- 密码：查看 `docker-compose.admin.yml` 中的 `OPENCLAW_ADMIN_PASSWORD`
+
+行为说明：
+
+- `openclaw-quota-daemon` 启动后会立即执行一次检查
+- 某个实例任意 quota 窗口超额后，会自动执行 `docker compose stop openclaw-gateway`
+- 如果给实例设置了开始日期和截止日期，daemon 会按开始日期切分月度周期，例如 `1 月 2 日开始`，则 `2 月 2 日` 自动进入下一个月度周期
+- 暂停状态写入对应实例目录下的 `state/quota-controller.json`
+- 管理后台里的“已暂停”统计依赖这个状态文件，因此必须部署 daemon 才会和超额状态保持一致
 
 ### 编译检查
 

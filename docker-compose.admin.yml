@@ -1,0 +1,39 @@
+services:
+  openclaw-admin:
+    container_name: openclaw-admin
+    image: weixinbot-openclaw-admin:local
+    build:
+      context: .
+      dockerfile: Dockerfile.admin
+    restart: unless-stopped
+    environment:
+      OPENCLAW_ADMIN_LISTEN: ":8088"
+      OPENCLAW_INSTANCES_DIR: "/root/openclaw-instances"
+      OPENCLAW_QUOTA_CONFIG: "/root/openclaw-instances/quota-config.json"
+      OPENCLAW_SCRIPTS_DIR: "/opt/openclaw-scripts"
+      OPENCLAW_ADMIN_WEB_DIST: "/opt/openclaw-admin/web/dist"
+      OPENCLAW_ADMIN_ALLOWED_ORIGINS: ""
+      OPENCLAW_ADMIN_USERNAME: "admin"
+      OPENCLAW_ADMIN_PASSWORD: "233d093f2f63bf9b86886fefcc5a2f97"
+    ports:
+      - "0.0.0.0:2052:8088"
+      - "0.0.0.0:39188:8088"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /root/openclaw-instances:/root/openclaw-instances
+
+  openclaw-quota-daemon:
+    container_name: openclaw-quota-daemon
+    image: weixinbot-openclaw-admin:local
+    restart: unless-stopped
+    environment:
+      OPENCLAW_INSTANCES_DIR: "/root/openclaw-instances"
+      OPENCLAW_QUOTA_CONFIG: "/root/openclaw-instances/quota-config.json"
+      OPENCLAW_QUOTA_INTERVAL_SECONDS: "60"
+    command:
+      - /bin/bash
+      - -lc
+      - /opt/openclaw-scripts/openclaw-quota-control.sh daemon --config /root/openclaw-instances/quota-config.json --base-dir /root/openclaw-instances --interval-seconds 60
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /root/openclaw-instances:/root/openclaw-instances

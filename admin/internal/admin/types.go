@@ -1,0 +1,157 @@
+package admin
+
+type UsageTotals struct {
+	Input       int64 `json:"input"`
+	Output      int64 `json:"output"`
+	CacheRead   int64 `json:"cacheRead"`
+	CacheWrite  int64 `json:"cacheWrite"`
+	TotalTokens int64 `json:"totalTokens"`
+}
+
+type ContainerStats struct {
+	Total   int `json:"total"`
+	Running int `json:"running"`
+	Exited  int `json:"exited"`
+	Other   int `json:"other"`
+}
+
+type ModelSummary struct {
+	Provider          string      `json:"provider"`
+	Model             string      `json:"model"`
+	ModelRef          string      `json:"modelRef"`
+	AssistantMessages int64       `json:"assistantMessages"`
+	Totals            UsageTotals `json:"totals"`
+}
+
+type InstanceStats struct {
+	Instance               string         `json:"instance"`
+	Path                   string         `json:"path"`
+	ConfiguredPrimaryModel string         `json:"configuredPrimaryModel"`
+	ContainerStats         ContainerStats `json:"containerStats"`
+	GatewayState           string         `json:"gatewayState"`
+	SessionFiles           int            `json:"sessionFiles"`
+	AssistantMessages      int64          `json:"assistantMessages"`
+	Totals                 UsageTotals    `json:"totals"`
+	Models                 []ModelSummary `json:"models"`
+}
+
+type StatsSummary struct {
+	BaseDir            string          `json:"baseDir"`
+	ScannedInstances   int             `json:"scannedInstances"`
+	ScannedSessionFile int             `json:"scannedSessionFiles"`
+	AssistantMessages  int64           `json:"assistantMessages"`
+	Totals             UsageTotals     `json:"totals"`
+	Instances          []InstanceStats `json:"instances"`
+}
+
+type QuotaPolicy struct {
+	Disabled              bool             `json:"disabled,omitempty"`
+	Limits                map[string]int64 `json:"limits,omitempty"`
+	StopServices          []string         `json:"stopServices,omitempty"`
+	ResumeWhenWithinLimit *bool            `json:"resumeWhenWithinLimit,omitempty"`
+	ValidFrom             string           `json:"validFrom,omitempty"`
+	ValidUntil            string           `json:"validUntil,omitempty"`
+}
+
+type QuotaConfig struct {
+	Defaults  QuotaPolicy             `json:"defaults"`
+	Instances map[string]*QuotaPolicy `json:"instances,omitempty"`
+}
+
+type QuotaState struct {
+	Instance              string             `json:"instance"`
+	Paused                bool               `json:"paused"`
+	UpdatedAt             string             `json:"updatedAt,omitempty"`
+	PausedAt              string             `json:"pausedAt,omitempty"`
+	ResumedAt             string             `json:"resumedAt,omitempty"`
+	PauseReason           string             `json:"pauseReason,omitempty"`
+	ResumeWhenWithinLimit bool               `json:"resumeWhenWithinLimit"`
+	StopServices          []string           `json:"stopServices,omitempty"`
+	ExceededWindows       []QuotaWindowUsage `json:"exceededWindows,omitempty"`
+}
+
+type QuotaValidity struct {
+	StartDate          string `json:"startDate,omitempty"`
+	EndDate            string `json:"endDate,omitempty"`
+	DurationMonths     int    `json:"durationMonths,omitempty"`
+	Status             string `json:"status,omitempty"`
+	Active             bool   `json:"active"`
+	CurrentPeriodStart string `json:"currentPeriodStart,omitempty"`
+	CurrentPeriodEnd   string `json:"currentPeriodEnd,omitempty"`
+}
+
+type QuotaWindowUsage struct {
+	Window      string `json:"window"`
+	UsageTokens int64  `json:"usageTokens"`
+	LimitTokens int64  `json:"limitTokens"`
+}
+
+type EffectiveQuota struct {
+	Disabled              bool             `json:"disabled"`
+	Limits                map[string]int64 `json:"limits"`
+	StopServices          []string         `json:"stopServices"`
+	ResumeWhenWithinLimit bool             `json:"resumeWhenWithinLimit"`
+	Validity              QuotaValidity    `json:"validity"`
+}
+
+type InstanceView struct {
+	Stats          InstanceStats         `json:"stats"`
+	Quota          EffectiveQuota        `json:"quota"`
+	QuotaState     *QuotaState           `json:"quotaState,omitempty"`
+	QuotaUsage     map[string]int64      `json:"quotaUsage"`
+	QuotaExceeded  map[string]bool       `json:"quotaExceeded"`
+	QuotaRatio     map[string]float64    `json:"quotaRatio"`
+	QuotaSource    *QuotaPolicy          `json:"quotaSource,omitempty"`
+	DefaultQuota   QuotaPolicy           `json:"defaultQuota"`
+	RecentTopModel *ModelSummary         `json:"recentTopModel,omitempty"`
+	Tags           map[string]string     `json:"tags,omitempty"`
+	Actions        map[string]ActionHint `json:"actions"`
+}
+
+type ActionHint struct {
+	Label  string `json:"label"`
+	Method string `json:"method"`
+	Path   string `json:"path"`
+}
+
+type ListInstancesResponse struct {
+	GeneratedAt      string         `json:"generatedAt"`
+	Instances        []InstanceView `json:"instances"`
+	Totals           UsageTotals    `json:"totals"`
+	ScannedInstances int            `json:"scannedInstances"`
+	QuotaConfigPath  string         `json:"quotaConfigPath"`
+}
+
+type QuotaUpdateRequest struct {
+	Mode                  string  `json:"mode"`
+	Daily                 *int64  `json:"daily"`
+	Monthly               *int64  `json:"monthly"`
+	Total                 *int64  `json:"total"`
+	Disabled              *bool   `json:"disabled"`
+	ResumeWhenWithinLimit *bool   `json:"resumeWhenWithinLimit"`
+	ValidFrom             *string `json:"validFrom"`
+	ValidUntil            *string `json:"validUntil"`
+}
+
+type CreateInstanceRequest struct {
+	Name                 string              `json:"name"`
+	GatewayPort          string              `json:"gatewayPort"`
+	BridgePort           string              `json:"bridgePort"`
+	WithWeixin           *bool               `json:"withWeixin"`
+	SkipWeixinLogin      *bool               `json:"skipWeixinLogin"`
+	PrimaryModelProvider string              `json:"primaryModelProvider"`
+	ZAIAPIKey            string              `json:"zaiApiKey"`
+	ZAIModel             string              `json:"zaiModel"`
+	OpenAIAPIKey         string              `json:"openaiApiKey"`
+	OpenAIBaseURL        string              `json:"openaiBaseUrl"`
+	OpenAIModel          string              `json:"openaiModel"`
+	BraveAPIKey          string              `json:"braveApiKey"`
+	Quota                *QuotaUpdateRequest `json:"quota,omitempty"`
+}
+
+type ActionResponse struct {
+	OK       bool   `json:"ok"`
+	Message  string `json:"message"`
+	Instance string `json:"instance,omitempty"`
+	Command  string `json:"command,omitempty"`
+}

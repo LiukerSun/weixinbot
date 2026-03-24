@@ -1,0 +1,41 @@
+FROM node:20-alpine AS web-build
+WORKDIR /build/web
+COPY admin/web/package.json admin/web/package-lock.json ./
+RUN npm ci
+COPY admin/web/ ./
+RUN npm run build
+
+FROM golang:1.22-alpine AS admin-build
+WORKDIR /build/admin
+COPY admin/go.mod ./
+COPY admin/cmd ./cmd
+COPY admin/internal ./internal
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/openclaw-admin ./cmd/openclaw-admin
+
+FROM node:20-alpine AS runtime
+RUN apk add --no-cache bash docker-cli docker-cli-compose openssl coreutils gzip
+WORKDIR /app
+
+COPY --from=admin-build /out/openclaw-admin /usr/local/bin/openclaw-admin
+COPY --from=web-build /build/web/dist /opt/openclaw-admin/web/dist
+
+COPY create-openclaw-instance.sh /opt/openclaw-scripts/create-openclaw-instance.sh
+COPY weixin-login.sh /opt/openclaw-scripts/weixin-login.sh
+COPY openclaw-stats.sh /opt/openclaw-scripts/openclaw-stats.sh
+COPY set-openclaw-model.sh /opt/openclaw-scripts/set-openclaw-model.sh
+COPY openclaw-monitor.sh /opt/openclaw-scripts/openclaw-monitor.sh
+COPY openclaw-quota-control.sh /opt/openclaw-scripts/openclaw-quota-control.sh
+COPY openclaw-quota-config.example.json /opt/openclaw-scripts/openclaw-quota-config.example.json
+
+RUN chmod +x /usr/local/bin/openclaw-admin /opt/openclaw-scripts/*.sh
+
+ENV OPENCLAW_ADMIN_LISTEN=:8088
+ENV OPENCLAW_INSTANCES_DIR=/root/openclaw-instances
+ENV OPENCLAW_QUOTA_CONFIG=/root/openclaw-instances/quota-config.json
+ENV OPENCLAW_SCRIPTS_DIR=/opt/openclaw-scripts
+ENV OPENCLAW_ADMIN_WEB_DIST=/opt/openclaw-admin/web/dist
+ENV OPENCLAW_ADMIN_ALLOWED_ORIGINS=
+
+EXPOSE 8088
+
+CMD ["openclaw-admin"]

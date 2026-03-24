@@ -10,6 +10,8 @@ CREATE_SCRIPT_NAME="create-openclaw-instance.sh"
 WEIXIN_LOGIN_SCRIPT_NAME="weixin-login.sh"
 STATS_SCRIPT_NAME="openclaw-stats.sh"
 SET_MODEL_SCRIPT_NAME="set-openclaw-model.sh"
+MONITOR_SCRIPT_NAME="openclaw-monitor.sh"
+QUOTA_CONTROL_SCRIPT_NAME="openclaw-quota-control.sh"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -58,12 +60,16 @@ main() {
   install_script "$WEIXIN_LOGIN_SCRIPT_NAME"
   install_script "$STATS_SCRIPT_NAME"
   install_script "$SET_MODEL_SCRIPT_NAME"
+  install_script "$MONITOR_SCRIPT_NAME"
+  install_script "$QUOTA_CONTROL_SCRIPT_NAME"
 
   echo "Installed scripts:"
   echo "  ${INSTALL_DIR}/${CREATE_SCRIPT_NAME}"
   echo "  ${INSTALL_DIR}/${WEIXIN_LOGIN_SCRIPT_NAME}"
   echo "  ${INSTALL_DIR}/${STATS_SCRIPT_NAME}"
   echo "  ${INSTALL_DIR}/${SET_MODEL_SCRIPT_NAME}"
+  echo "  ${INSTALL_DIR}/${MONITOR_SCRIPT_NAME}"
+  echo "  ${INSTALL_DIR}/${QUOTA_CONTROL_SCRIPT_NAME}"
   echo ""
   exec "${INSTALL_DIR}/${CREATE_SCRIPT_NAME}" "$@"
 }
