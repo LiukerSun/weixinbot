@@ -400,6 +400,7 @@ for (const instanceDir of instanceDirs) {
     instance: instanceName,
     path: instanceDir,
     configuredPrimaryModel,
+    recentModel: null,
     containerStats,
     gatewayState: getGatewayState(containers),
     containers,
@@ -409,6 +410,8 @@ for (const instanceDir of instanceDirs) {
     models: [],
   };
   const instanceModelMap = new Map();
+  let recentModel = null;
+  let recentModelTs = null;
 
   for (const sessionFile of listSessionFiles(stateDir)) {
     instanceSummary.sessionFiles += 1;
@@ -460,14 +463,26 @@ for (const instanceDir of instanceDirs) {
         continue;
       }
 
+      const provider = entry.message?.provider || lastProvider;
+      const model = entry.message?.model || lastModel;
+      const modelRef = toModelRef(provider, model);
+      if (
+        Number.isFinite(messageTimestamp) &&
+        (recentModelTs == null || messageTimestamp > recentModelTs)
+      ) {
+        recentModelTs = messageTimestamp;
+        recentModel = {
+          provider: provider || "unknown",
+          model: model || "unknown",
+          modelRef,
+          timestamp: new Date(messageTimestamp).toISOString(),
+        };
+      }
+
       const usage = normalizeUsage(entry.message?.usage);
       if (usage.totalTokens <= 0) {
         continue;
       }
-
-      const provider = entry.message?.provider || lastProvider;
-      const model = entry.message?.model || lastModel;
-      const modelRef = toModelRef(provider, model);
 
       instanceSummary.assistantMessages += 1;
       summary.assistantMessages += 1;
@@ -506,6 +521,7 @@ for (const instanceDir of instanceDirs) {
     }
   }
 
+  instanceSummary.recentModel = recentModel;
   instanceSummary.models = Array.from(instanceModelMap.values())
     .sort((a, b) => b.totals.totalTokens - a.totals.totalTokens || a.modelRef.localeCompare(b.modelRef));
   if (summary.containerDiscovery.available) {

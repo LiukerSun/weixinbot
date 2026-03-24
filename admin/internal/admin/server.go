@@ -12,7 +12,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,12 +24,17 @@ type Server struct {
 	cfg       Config
 	mux       *http.ServeMux
 	fileMutex sync.Mutex
+	weixinMu  sync.Mutex
+	weixinQR  map[string]*weixinLoginSession
 }
+
+var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 func NewServer(cfg Config) (*Server, error) {
 	server := &Server{
-		cfg: cfg,
-		mux: http.NewServeMux(),
+		cfg:      cfg,
+		mux:      http.NewServeMux(),
+		weixinQR: map[string]*weixinLoginSession{},
 	}
 
 	server.routes()
@@ -157,6 +164,60 @@ func (s *Server) handleInstanceActions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.writeJSON(w, http.StatusOK, view)
+		return
+	}
+
+	if len(parts) == 2 && r.Method == http.MethodGet {
+		switch parts[1] {
+		case "logs":
+			response, err := s.instanceLogs(
+				r.Context(),
+				instanceName,
+				r.URL.Query().Get("service"),
+				r.URL.Query().Get("tail"),
+			)
+			if err != nil {
+				s.writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			s.writeJSON(w, http.StatusOK, response)
+			return
+		case "weixin-qr":
+			response, err := s.weixinLoginStatus(r.Context(), instanceName)
+			if err != nil {
+				s.writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			s.writeJSON(w, http.StatusOK, response)
+			return
+		}
+	}
+
+	if r.Method == http.MethodPost && len(parts) == 3 && parts[1] == "weixin-qr" {
+		var (
+			result any
+			err    error
+		)
+
+		switch parts[2] {
+		case "start":
+			request := WeixinLoginStartRequest{}
+			if err = decodeJSONBody(r, &request); err == nil {
+				result, err = s.startWeixinLogin(instanceName, request.Force)
+			}
+		case "stop":
+			result, err = s.stopWeixinLogin(instanceName)
+		default:
+			http.NotFound(w, r)
+			return
+		}
+
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, err)
+			return
+		}
+
+		s.writeJSON(w, http.StatusOK, result)
 		return
 	}
 
@@ -294,22 +355,16 @@ func (s *Server) composeInstanceView(ctx context.Context, instance InstanceStats
 		}
 	}
 
-	var topModel *ModelSummary
-	if len(instance.Models) > 0 {
-		value := instance.Models[0]
-		topModel = &value
-	}
-
 	return InstanceView{
-		Stats:          instance,
-		Quota:          effectiveQuota,
-		QuotaState:     quotaState,
-		QuotaUsage:     quotaUsage,
-		QuotaExceeded:  quotaExceeded,
-		QuotaRatio:     quotaRatio,
-		QuotaSource:    quotaSource,
-		DefaultQuota:   quotaConfig.Defaults,
-		RecentTopModel: topModel,
+		Stats:         instance,
+		Quota:         effectiveQuota,
+		QuotaState:    quotaState,
+		QuotaUsage:    quotaUsage,
+		QuotaExceeded: quotaExceeded,
+		QuotaRatio:    quotaRatio,
+		QuotaSource:   quotaSource,
+		DefaultQuota:  quotaConfig.Defaults,
+		RecentModel:   instance.RecentModel,
 		Actions: map[string]ActionHint{
 			"pause":   {Label: "Pause", Method: "POST", Path: fmt.Sprintf("/api/instances/%s/pause", instance.Instance)},
 			"resume":  {Label: "Resume", Method: "POST", Path: fmt.Sprintf("/api/instances/%s/resume", instance.Instance)},
@@ -426,12 +481,10 @@ func (s *Server) updateQuota(ctx context.Context, instance string, request Quota
 }
 
 func (s *Server) instanceComposeAction(ctx context.Context, instance string, composeArgs ...string) (ActionResponse, error) {
-	instanceDir := filepath.Join(s.cfg.InstancesDir, instance)
-	composeFile := filepath.Join(instanceDir, "docker-compose.yml")
-	if _, err := os.Stat(composeFile); err != nil {
-		return ActionResponse{}, fmt.Errorf("instance not found: %s", instance)
+	composeFile, err := s.instanceComposeFile(instance)
+	if err != nil {
+		return ActionResponse{}, err
 	}
-
 	commandArgs, err := s.composeArgs(composeFile, composeArgs...)
 	if err != nil {
 		return ActionResponse{}, err
@@ -446,6 +499,68 @@ func (s *Server) instanceComposeAction(ctx context.Context, instance string, com
 		Message:  fmt.Sprintf("%s %s", instance, strings.Join(composeArgs, " ")),
 		Instance: instance,
 		Command:  strings.Join(commandArgs, " "),
+	}, nil
+}
+
+func (s *Server) instanceLogs(ctx context.Context, instance string, serviceRaw string, tailRaw string) (InstanceLogsResponse, error) {
+	composeFile, err := s.instanceComposeFile(instance)
+	if err != nil {
+		return InstanceLogsResponse{}, err
+	}
+
+	services, err := s.instanceComposeServices(ctx, composeFile)
+	if err != nil {
+		return InstanceLogsResponse{}, err
+	}
+
+	if len(services) == 0 {
+		services = []string{"openclaw-gateway"}
+	}
+
+	service := strings.TrimSpace(serviceRaw)
+	if service == "" {
+		if slices.Contains(services, "openclaw-gateway") {
+			service = "openclaw-gateway"
+		} else {
+			service = services[0]
+		}
+	}
+	if !slices.Contains(services, service) {
+		return InstanceLogsResponse{}, fmt.Errorf("unknown service for %s: %s", instance, service)
+	}
+
+	tail := 300
+	if strings.TrimSpace(tailRaw) != "" {
+		parsed, err := strconv.Atoi(strings.TrimSpace(tailRaw))
+		if err != nil {
+			return InstanceLogsResponse{}, fmt.Errorf("invalid tail value: %s", tailRaw)
+		}
+		tail = parsed
+	}
+	if tail < 20 {
+		tail = 20
+	}
+	if tail > 5000 {
+		tail = 5000
+	}
+
+	commandArgs, err := s.composeArgs(composeFile, "logs", "--no-color", "--tail", strconv.Itoa(tail), service)
+	if err != nil {
+		return InstanceLogsResponse{}, err
+	}
+
+	output, err := s.runCommand(ctx, commandArgs[0], commandArgs[1:]...)
+	if err != nil {
+		return InstanceLogsResponse{}, err
+	}
+
+	return InstanceLogsResponse{
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		Instance:    instance,
+		Service:     service,
+		Tail:        tail,
+		Services:    services,
+		Content:     strings.TrimSpace(stripANSIEscapeCodes(string(output))),
 	}, nil
 }
 
@@ -506,6 +621,16 @@ func (s *Server) createInstance(ctx context.Context, request CreateInstanceReque
 		return InstanceView{}, err
 	}
 
+	if withWeixin {
+		composeFile, err := s.instanceComposeFile(name)
+		if err != nil {
+			return InstanceView{}, err
+		}
+		if err := s.ensureWeixinPluginReady(ctx, name, composeFile); err != nil {
+			return InstanceView{}, err
+		}
+	}
+
 	if request.Quota != nil {
 		if _, err := s.updateQuota(ctx, name, *request.Quota); err != nil {
 			return InstanceView{}, err
@@ -513,6 +638,41 @@ func (s *Server) createInstance(ctx context.Context, request CreateInstanceReque
 	}
 
 	return s.getInstanceView(ctx, name)
+}
+
+func (s *Server) instanceComposeFile(instance string) (string, error) {
+	instanceDir := filepath.Join(s.cfg.InstancesDir, instance)
+	composeFile := filepath.Join(instanceDir, "docker-compose.yml")
+	if _, err := os.Stat(composeFile); err != nil {
+		return "", fmt.Errorf("instance not found: %s", instance)
+	}
+	return composeFile, nil
+}
+
+func (s *Server) instanceComposeServices(ctx context.Context, composeFile string) ([]string, error) {
+	commandArgs, err := s.composeArgs(composeFile, "ps", "--services", "--all")
+	if err != nil {
+		return nil, err
+	}
+
+	output, err := s.runCommand(ctx, commandArgs[0], commandArgs[1:]...)
+	if err == nil {
+		services := splitLinesUnique(string(output))
+		if len(services) > 0 {
+			return services, nil
+		}
+	}
+
+	commandArgs, err = s.composeArgs(composeFile, "config", "--services")
+	if err != nil {
+		return nil, err
+	}
+	output, err = s.runCommand(ctx, commandArgs[0], commandArgs[1:]...)
+	if err != nil {
+		return nil, err
+	}
+
+	return splitLinesUnique(string(output)), nil
 }
 
 func (s *Server) composeArgs(composeFile string, commandArgs ...string) ([]string, error) {
@@ -550,6 +710,24 @@ func (s *Server) runCommand(ctx context.Context, name string, args ...string) ([
 	}
 
 	return stdout.Bytes(), nil
+}
+
+func splitLinesUnique(value string) []string {
+	seen := map[string]bool{}
+	result := []string{}
+	for _, line := range strings.Split(value, "\n") {
+		item := strings.TrimSpace(line)
+		if item == "" || seen[item] {
+			continue
+		}
+		seen[item] = true
+		result = append(result, item)
+	}
+	return result
+}
+
+func stripANSIEscapeCodes(value string) string {
+	return ansiEscapePattern.ReplaceAllString(value, "")
 }
 
 func (s *Server) handleFrontend() http.Handler {

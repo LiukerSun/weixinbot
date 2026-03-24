@@ -33,6 +33,8 @@ has_cmd() {
 }
 
 APT_UPDATED=0
+declare -A RESERVED_HOST_PORTS=()
+RESERVED_HOST_PORTS_LOADED=0
 
 has_compose() {
   if has_cmd docker-compose; then
@@ -430,13 +432,12 @@ is_port_in_use() {
   local port="$1"
   local status=0
 
-  if has_cmd ss; then
-    ss -H -ltn "( sport = :${port} )" 2>/dev/null | grep -q .
-    return $?
+  if is_port_reserved "$port"; then
+    return 0
   fi
 
-  if has_cmd lsof; then
-    lsof -nP -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1
+  if has_cmd ss; then
+    ss -H -ltn "( sport = :${port} )" 2>/dev/null | grep -q .
     return $?
   fi
 
@@ -465,6 +466,92 @@ EOF
     1) return 1 ;;
     *) fail "Port probe failed for ${port}" ;;
   esac
+}
+
+mark_reserved_port() {
+  local port="${1:-}"
+  [[ "$port" =~ ^[0-9]+$ ]] || return 0
+  if (( port >= 1 && port <= 65535 )); then
+    RESERVED_HOST_PORTS["$port"]=1
+  fi
+}
+
+mark_reserved_port_range() {
+  local value="${1:-}"
+  local start=""
+  local end=""
+  local port=""
+
+  if [[ "$value" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+    start="${BASH_REMATCH[1]}"
+    end="${BASH_REMATCH[2]}"
+    if (( start > end )); then
+      port="$start"
+      start="$end"
+      end="$port"
+    fi
+    for ((port = start; port <= end; port++)); do
+      mark_reserved_port "$port"
+    done
+    return 0
+  fi
+
+  mark_reserved_port "$value"
+}
+
+load_reserved_ports_from_instance_envs() {
+  local root_dir="${OPENCLAW_INSTANCES_DIR:-/root/openclaw-instances}"
+  local env_file=""
+  local raw_line=""
+
+  [[ -d "$root_dir" ]] || return 0
+
+  while IFS= read -r env_file; do
+    [[ -f "$env_file" ]] || continue
+    while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
+      case "$raw_line" in
+        OPENCLAW_GATEWAY_PORT=*|OPENCLAW_BRIDGE_PORT=*)
+          mark_reserved_port "${raw_line#*=}"
+          ;;
+      esac
+    done <"$env_file"
+  done < <(find "$root_dir" -mindepth 2 -maxdepth 2 -name .env -type f 2>/dev/null | sort)
+}
+
+load_reserved_ports_from_docker() {
+  local line=""
+  local binding=""
+  local port_spec=""
+  local output=""
+
+  has_cmd docker || return 0
+  output="$(docker ps --format '{{.Ports}}' 2>/dev/null || true)"
+  [[ -n "$output" ]] || return 0
+
+  while IFS= read -r line; do
+    while IFS= read -r binding; do
+      [[ -n "$binding" ]] || continue
+      port_spec="${binding##*:}"
+      mark_reserved_port_range "$port_spec"
+    done < <(printf '%s\n' "$line" | grep -Eo '(127\.0\.0\.1|0\.0\.0\.0|\[::\]|::):[0-9]+(-[0-9]+)?' || true)
+  done <<<"$output"
+}
+
+load_reserved_ports_cache() {
+  RESERVED_HOST_PORTS=()
+  load_reserved_ports_from_instance_envs
+  load_reserved_ports_from_docker
+  RESERVED_HOST_PORTS_LOADED=1
+}
+
+is_port_reserved() {
+  local port="${1:-}"
+
+  if [[ "$RESERVED_HOST_PORTS_LOADED" != "1" ]]; then
+    load_reserved_ports_cache
+  fi
+
+  [[ -n "${RESERVED_HOST_PORTS[$port]:-}" ]]
 }
 
 find_free_port_pair() {
@@ -742,6 +829,75 @@ wait_for_gateway() {
 restart_gateway() {
   compose restart openclaw-gateway >/dev/null
   wait_for_gateway
+}
+
+weixin_extension_exists() {
+  compose run -T --rm --no-deps --entrypoint sh openclaw-cli -lc '[ -d /home/node/.openclaw/extensions/openclaw-weixin ]' >/dev/null 2>&1
+}
+
+install_weixin_plugin() {
+  local compose_cmd=()
+  local install_pid=""
+  local install_status=0
+  local deadline=0
+
+  if has_cmd docker-compose; then
+    compose_cmd=(docker-compose -f "${INSTANCE_DIR}/docker-compose.yml" run -T --rm --no-deps openclaw-cli plugins install "@tencent-weixin/openclaw-weixin")
+  else
+    compose_cmd=(docker compose -f "${INSTANCE_DIR}/docker-compose.yml" run -T --rm --no-deps openclaw-cli plugins install "@tencent-weixin/openclaw-weixin")
+  fi
+
+  "${compose_cmd[@]}" &
+  install_pid="$!"
+  deadline=$((SECONDS + 180))
+
+  while kill -0 "$install_pid" >/dev/null 2>&1; do
+    if weixin_extension_exists; then
+      kill "$install_pid" >/dev/null 2>&1 || true
+      wait "$install_pid" >/dev/null 2>&1 || true
+      echo "WARNING: openclaw-weixin extension files appeared before installer exited; continuing with repair." >&2
+      return 0
+    fi
+
+    if (( SECONDS >= deadline )); then
+      kill "$install_pid" >/dev/null 2>&1 || true
+      wait "$install_pid" >/dev/null 2>&1 || true
+      break
+    fi
+    sleep 2
+  done
+
+  if wait "$install_pid"; then
+    return 0
+  fi
+
+  if weixin_extension_exists; then
+    echo "WARNING: openclaw-weixin install command did not exit cleanly, but extension files exist; continuing with repair." >&2
+    return 0
+  fi
+
+  fail "openclaw-weixin installation failed before extension files appeared"
+}
+
+weixin_channel_registered() {
+  compose exec -T openclaw-gateway sh -lc "node dist/index.js channels list --json 2>/dev/null | grep -q '\"openclaw-weixin\"'" >/dev/null 2>&1
+}
+
+ensure_weixin_plugin_ready() {
+  if ! weixin_extension_exists; then
+    install_weixin_plugin
+  fi
+
+  repair_installed_weixin_plugin
+  restart_gateway
+
+  if ! weixin_extension_exists; then
+    fail "openclaw-weixin install verification failed: extension directory missing after repair"
+  fi
+
+  if ! weixin_channel_registered; then
+    fail "openclaw-weixin verification failed: gateway still does not register channel"
+  fi
 }
 
 write_compose_file() {
@@ -1056,9 +1212,7 @@ compose up -d openclaw-gateway
 wait_for_gateway
 
 if [[ "$WITH_WEIXIN" == "1" ]]; then
-  compose run -T --rm openclaw-cli plugins install "@tencent-weixin/openclaw-weixin"
-  repair_installed_weixin_plugin
-  restart_gateway
+  ensure_weixin_plugin_ready
 fi
 
 CREATE_COMPLETED=1

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
+import QRCode from "qrcode";
 
 const emptyCreateForm = {
   name: "",
   gatewayPort: "auto",
   bridgePort: "auto",
   withWeixin: true,
-  skipWeixinLogin: true,
+  autoOpenWeixinQr: true,
   primaryModelProvider: "openai",
   zaiApiKey: "",
   zaiModel: "glm-5-turbo",
@@ -30,6 +31,26 @@ const emptyQuotaForm = {
   validFrom: "",
   validUntil: "",
 };
+
+const logTailOptions = [100, 300, 1000, 3000];
+
+function mergeWeixinQrViewer(response, current = null) {
+  return {
+    instance: response.instance,
+    active: Boolean(response.active),
+    connected: Boolean(response.connected),
+    status: response.status || "idle",
+    message: response.message || "",
+    qrUrl: response.qrUrl || "",
+    output: response.output || "",
+    startedAt: response.startedAt || "",
+    updatedAt: response.updatedAt || "",
+    finishedAt: response.finishedAt || "",
+    loading: false,
+    error: "",
+    justStarted: current?.justStarted || false,
+  };
+}
 
 async function requestJSON(path, options = {}) {
   const response = await fetch(path, {
@@ -216,6 +237,9 @@ export default function App() {
   const [createForm, setCreateForm] = useState(emptyCreateForm);
   const [busyAction, setBusyAction] = useState("");
   const [notice, setNotice] = useState("");
+  const [logViewer, setLogViewer] = useState(null);
+  const [weixinQrViewer, setWeixinQrViewer] = useState(null);
+  const [weixinQrImage, setWeixinQrImage] = useState("");
 
   async function loadInstances() {
     setLoading(true);
@@ -244,7 +268,7 @@ export default function App() {
       return [
         item.stats.instance,
         item.stats.configuredPrimaryModel,
-        item.recentTopModel?.modelRef,
+        item.recentModel?.modelRef,
         item.stats.gatewayState,
       ]
         .filter(Boolean)
@@ -322,6 +346,141 @@ export default function App() {
     }
   }
 
+  async function loadLogs(instanceName, options = {}) {
+    const service = options.service || logViewer?.service || "openclaw-gateway";
+    const tail = Number(options.tail || logViewer?.tail || 300);
+
+    setLogViewer((prev) => ({
+      instance: instanceName,
+      service,
+      tail,
+      services: prev?.instance === instanceName ? (prev.services || []) : [],
+      content: prev?.instance === instanceName && prev.service === service ? prev.content : "",
+      generatedAt: prev?.instance === instanceName ? prev.generatedAt : "",
+      loading: true,
+      error: "",
+    }));
+
+    try {
+      const params = new URLSearchParams({
+        service,
+        tail: String(tail),
+      });
+      const response = await requestJSON(`/api/instances/${instanceName}/logs?${params.toString()}`);
+      setLogViewer({
+        instance: response.instance,
+        service: response.service,
+        tail: response.tail,
+        services: response.services || [],
+        content: response.content || "",
+        generatedAt: response.generatedAt || "",
+        loading: false,
+        error: "",
+      });
+    } catch (requestError) {
+      setLogViewer((prev) => ({
+        instance: instanceName,
+        service,
+        tail,
+        services: prev?.services || [],
+        content: prev?.content || "",
+        generatedAt: prev?.generatedAt || "",
+        loading: false,
+        error: requestError.message,
+      }));
+    }
+  }
+
+  function openLogViewer(instance) {
+    loadLogs(instance.stats.instance, { service: "openclaw-gateway", tail: 300 });
+  }
+
+  function closeLogViewer() {
+    setLogViewer(null);
+  }
+
+  async function loadWeixinQrStatus(instanceName) {
+    try {
+      const response = await requestJSON(`/api/instances/${instanceName}/weixin-qr`);
+      setWeixinQrViewer((prev) => {
+        if (!prev || prev.instance !== instanceName) {
+          return prev;
+        }
+        return {
+          ...mergeWeixinQrViewer(response, prev),
+          justStarted: false,
+        };
+      });
+    } catch (requestError) {
+      setWeixinQrViewer((prev) => {
+        if (!prev || prev.instance !== instanceName) {
+          return prev;
+        }
+        return {
+          ...prev,
+          loading: false,
+          error: requestError.message,
+        };
+      });
+    }
+  }
+
+  async function startWeixinQr(instanceName, force = false) {
+    setWeixinQrViewer((prev) => ({
+      instance: instanceName,
+      active: prev?.instance === instanceName ? prev.active : false,
+      connected: prev?.instance === instanceName ? prev.connected : false,
+      status:
+        prev?.instance === instanceName && prev.status && prev.status !== "creating"
+          ? prev.status
+          : "starting",
+      message:
+        prev?.instance === instanceName && prev.status && prev.status !== "creating"
+          ? prev.message
+          : "正在生成微信二维码...",
+      qrUrl: prev?.instance === instanceName ? prev.qrUrl : "",
+      output: prev?.instance === instanceName ? prev.output : "",
+      startedAt: prev?.instance === instanceName ? prev.startedAt : "",
+      updatedAt: prev?.instance === instanceName ? prev.updatedAt : "",
+      finishedAt: prev?.instance === instanceName ? prev.finishedAt : "",
+      loading: true,
+      error: "",
+      justStarted: true,
+    }));
+
+    try {
+      const response = await requestJSON(`/api/instances/${instanceName}/weixin-qr/start`, {
+        method: "POST",
+        body: JSON.stringify({ force }),
+      });
+      setWeixinQrViewer((prev) => ({
+        ...mergeWeixinQrViewer(response, prev),
+        justStarted: false,
+      }));
+    } catch (requestError) {
+      setWeixinQrViewer((prev) => ({
+        ...(prev || { instance: instanceName }),
+        loading: false,
+        error: requestError.message,
+      }));
+    }
+  }
+
+  function openWeixinQrViewer(instanceName, force = false) {
+    startWeixinQr(instanceName, force);
+  }
+
+  function closeWeixinQrViewer() {
+    const instanceName = weixinQrViewer?.instance;
+    setWeixinQrViewer(null);
+    if (instanceName) {
+      requestJSON(`/api/instances/${instanceName}/weixin-qr/stop`, {
+        method: "POST",
+        body: "{}",
+      }).catch(() => {});
+    }
+  }
+
   function openQuotaEditor(instance) {
     setSelectedInstance(instance);
     setQuotaForm({
@@ -380,62 +539,138 @@ export default function App() {
 
   async function submitCreateInstance(event) {
     event.preventDefault();
+    const instanceName = createForm.name.trim();
+    const shouldOpenWeixinQr = Boolean(createForm.withWeixin && createForm.autoOpenWeixinQr);
+    const quotaPayload = buildQuotaPayload({
+      mode: "set",
+      daily: createForm.quotaDaily,
+      monthly: createForm.quotaMonthly,
+      total: createForm.quotaTotal,
+      disabled: false,
+      resumeWhenWithinLimit: true,
+      validFrom: createForm.quotaValidFrom,
+      validUntil: createForm.quotaValidUntil,
+    });
+    const validityError = validateValidityRange(createForm.quotaValidFrom, createForm.quotaValidUntil);
+    if (validityError) {
+      setError(validityError);
+      return;
+    }
+
+    const payload = {
+      name: instanceName,
+      gatewayPort: createForm.gatewayPort,
+      bridgePort: createForm.bridgePort,
+      withWeixin: createForm.withWeixin,
+      skipWeixinLogin: true,
+      primaryModelProvider: createForm.primaryModelProvider,
+      zaiApiKey: createForm.zaiApiKey,
+      zaiModel: createForm.zaiModel,
+      openaiApiKey: createForm.openaiApiKey,
+      openaiBaseUrl: createForm.openaiBaseUrl,
+      openaiModel: createForm.openaiModel,
+      braveApiKey: createForm.braveApiKey,
+      quota:
+        quotaPayload.daily != null ||
+        quotaPayload.monthly != null ||
+        quotaPayload.total != null ||
+        quotaPayload.validFrom ||
+        quotaPayload.validUntil
+          ? quotaPayload
+          : undefined,
+    };
+
     setBusyAction("create-instance");
     setNotice("");
     setError("");
+    closeCreateModal();
+    if (shouldOpenWeixinQr) {
+      setWeixinQrViewer({
+        instance: instanceName,
+        active: false,
+        connected: false,
+        status: "creating",
+        message: "正在创建实例并准备微信对接...",
+        qrUrl: "",
+        output: "",
+        startedAt: "",
+        updatedAt: "",
+        finishedAt: "",
+        loading: true,
+        error: "",
+        justStarted: true,
+      });
+    }
 
     try {
-      const quotaPayload = buildQuotaPayload({
-        mode: "set",
-        daily: createForm.quotaDaily,
-        monthly: createForm.quotaMonthly,
-        total: createForm.quotaTotal,
-        disabled: false,
-        resumeWhenWithinLimit: true,
-        validFrom: createForm.quotaValidFrom,
-        validUntil: createForm.quotaValidUntil,
-      });
-      const validityError = validateValidityRange(createForm.quotaValidFrom, createForm.quotaValidUntil);
-      if (validityError) {
-        throw new Error(validityError);
-      }
-
-      const payload = {
-        name: createForm.name,
-        gatewayPort: createForm.gatewayPort,
-        bridgePort: createForm.bridgePort,
-        withWeixin: createForm.withWeixin,
-        skipWeixinLogin: createForm.skipWeixinLogin,
-        primaryModelProvider: createForm.primaryModelProvider,
-        zaiApiKey: createForm.zaiApiKey,
-        zaiModel: createForm.zaiModel,
-        openaiApiKey: createForm.openaiApiKey,
-        openaiBaseUrl: createForm.openaiBaseUrl,
-        openaiModel: createForm.openaiModel,
-        braveApiKey: createForm.braveApiKey,
-        quota:
-          quotaPayload.daily != null ||
-          quotaPayload.monthly != null ||
-          quotaPayload.total != null ||
-          quotaPayload.validFrom ||
-          quotaPayload.validUntil
-            ? quotaPayload
-            : undefined,
-      };
-
-      await requestJSON("/api/instances", {
+      const created = await requestJSON("/api/instances", {
         method: "POST",
         body: JSON.stringify(payload),
       });
-      closeCreateModal();
       setNotice("新实例已创建");
       await loadInstances();
+      if (shouldOpenWeixinQr) {
+        await startWeixinQr(created?.stats?.instance || instanceName, true);
+      }
     } catch (requestError) {
       setError(requestError.message);
+      if (shouldOpenWeixinQr) {
+        setWeixinQrViewer((prev) => ({
+          ...(prev || { instance: instanceName }),
+          active: false,
+          connected: false,
+          status: "error",
+          message: "实例创建失败",
+          loading: false,
+          error: requestError.message,
+          justStarted: false,
+        }));
+      }
     } finally {
       setBusyAction("");
     }
   }
+
+  useEffect(() => {
+    if (!weixinQrViewer?.instance || weixinQrViewer.status === "creating") {
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => {
+      loadWeixinQrStatus(weixinQrViewer.instance);
+    }, 3000);
+
+    return () => window.clearInterval(timer);
+  }, [weixinQrViewer?.instance]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!weixinQrViewer?.qrUrl) {
+      setWeixinQrImage("");
+      return undefined;
+    }
+
+    QRCode.toDataURL(weixinQrViewer.qrUrl, {
+      width: 360,
+      margin: 1,
+      errorCorrectionLevel: "M",
+    })
+      .then((value) => {
+        if (!cancelled) {
+          setWeixinQrImage(value);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setWeixinQrImage("");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [weixinQrViewer?.qrUrl]);
 
   const totals = data?.totals || {};
   const archives = data?.archives || [];
@@ -499,7 +734,7 @@ export default function App() {
               <thead>
                 <tr>
                   <th>实例</th>
-                  <th>主模型</th>
+                  <th>配置主模型</th>
                   <th>总用量</th>
                   <th>日额度</th>
                   <th>月额度</th>
@@ -526,7 +761,7 @@ export default function App() {
                       <td>
                         <div className="cell-title">{instance.stats.configuredPrimaryModel}</div>
                         <div className="cell-subtitle">
-                          最近模型 {instance.recentTopModel?.modelRef || "-"}
+                          最近使用模型 {instance.recentModel?.modelRef || "-"}
                         </div>
                       </td>
                       <td>
@@ -554,10 +789,28 @@ export default function App() {
                         </div>
                       </td>
                       <td>
-                        <StatusBadge
-                          tone={instance.stats.gatewayState === "running" ? "good" : "warn"}
-                          text={instance.stats.gatewayState}
-                        />
+                        <div className="log-cell">
+                          <StatusBadge
+                            tone={instance.stats.gatewayState === "running" ? "good" : "warn"}
+                            text={instance.stats.gatewayState}
+                          />
+                          <div className="gateway-action-links">
+                            <button
+                              type="button"
+                              className="ghost-button log-link-button"
+                              onClick={() => openLogViewer(instance)}
+                            >
+                              查看日志
+                            </button>
+                            <button
+                              type="button"
+                              className="ghost-button log-link-button"
+                              onClick={() => openWeixinQrViewer(instance.stats.instance, true)}
+                            >
+                              微信二维码
+                            </button>
+                          </div>
+                        </div>
                       </td>
                       <td>
                         {instance.quotaState?.paused && instance.quota.validity?.status === "upcoming" ? (
@@ -967,13 +1220,17 @@ export default function App() {
               <label className="checkbox-row">
                 <input
                   type="checkbox"
-                  checked={createForm.skipWeixinLogin}
+                  checked={createForm.autoOpenWeixinQr}
                   onChange={(event) =>
-                    setCreateForm((prev) => ({ ...prev, skipWeixinLogin: event.target.checked }))
+                    setCreateForm((prev) => ({ ...prev, autoOpenWeixinQr: event.target.checked }))
                   }
                 />
-                <span>创建后不自动拉起微信登录</span>
+                <span>创建完成后立即展示微信二维码</span>
               </label>
+            </div>
+
+            <div className="field-note">
+              为了避免创建流程卡住，后台会先完成容器创建，再单独拉起微信登录弹窗并持续刷新最新二维码。
             </div>
 
             <div className="form-actions">
@@ -985,6 +1242,147 @@ export default function App() {
               </button>
             </div>
           </form>
+        </ModalShell>
+      ) : null}
+
+      {logViewer ? (
+        <ModalShell
+          title={`运行日志 · ${logViewer.instance}`}
+          kicker="Logs"
+          onClose={closeLogViewer}
+          wide
+        >
+          <div className="log-toolbar">
+            <label>
+              <span>服务</span>
+              <select
+                value={logViewer.service}
+                onChange={(event) =>
+                  loadLogs(logViewer.instance, { service: event.target.value, tail: logViewer.tail })
+                }
+                disabled={logViewer.loading}
+              >
+                {(logViewer.services || []).map((service) => (
+                  <option key={service} value={service}>
+                    {service}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label>
+              <span>行数</span>
+              <select
+                value={String(logViewer.tail)}
+                onChange={(event) =>
+                  loadLogs(logViewer.instance, { service: logViewer.service, tail: Number(event.target.value) })
+                }
+                disabled={logViewer.loading}
+              >
+                {logTailOptions.map((value) => (
+                  <option key={value} value={value}>
+                    最近 {value} 行
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className="log-toolbar-actions">
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => loadLogs(logViewer.instance, { service: logViewer.service, tail: logViewer.tail })}
+                disabled={logViewer.loading}
+              >
+                {logViewer.loading ? "加载中..." : "刷新日志"}
+              </button>
+            </div>
+          </div>
+
+          <div className="log-meta">
+            <span>实例: {logViewer.instance}</span>
+            <span>服务: {logViewer.service}</span>
+            <span>更新: {logViewer.generatedAt || "-"}</span>
+          </div>
+
+          {logViewer.error ? <div className="banner error">{logViewer.error}</div> : null}
+
+          <pre className="log-output">
+            {logViewer.content || (logViewer.loading ? "正在加载日志..." : "当前没有可显示的日志。")}
+          </pre>
+        </ModalShell>
+      ) : null}
+
+      {weixinQrViewer ? (
+        <ModalShell
+          title={`微信二维码 · ${weixinQrViewer.instance}`}
+          kicker="Weixin Login"
+          onClose={closeWeixinQrViewer}
+        >
+          <div className="qr-toolbar">
+            <div className="selected-instance qr-status-card">
+              <div className="cell-title">{weixinQrViewer.instance}</div>
+              <div className="cell-subtitle">{weixinQrViewer.message || "正在准备微信登录..."}</div>
+            </div>
+
+            <div className="qr-toolbar-actions">
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => loadWeixinQrStatus(weixinQrViewer.instance)}
+                disabled={weixinQrViewer.loading}
+              >
+                {weixinQrViewer.loading ? "加载中..." : "刷新状态"}
+              </button>
+              <button
+                type="button"
+                onClick={() => startWeixinQr(weixinQrViewer.instance, true)}
+                disabled={weixinQrViewer.loading}
+              >
+                获取最新二维码
+              </button>
+            </div>
+          </div>
+
+          <div className="log-meta">
+            <span>状态: {weixinQrViewer.status || "-"}</span>
+            <span>开始: {weixinQrViewer.startedAt || "-"}</span>
+            <span>更新: {weixinQrViewer.updatedAt || "-"}</span>
+          </div>
+
+          {weixinQrViewer.error ? <div className="banner error">{weixinQrViewer.error}</div> : null}
+
+          <div className="qr-layout">
+            <div className="qr-preview">
+              {weixinQrViewer.qrUrl ? (
+                <>
+                  <img
+                    className="weixin-qr-image"
+                    src={weixinQrImage || ""}
+                    alt={`微信二维码 ${weixinQrViewer.instance}`}
+                  />
+                  <a
+                    className="ghost-button qr-open-link"
+                    href={weixinQrViewer.qrUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    在新窗口打开二维码
+                  </a>
+                </>
+              ) : (
+                <div className="empty-state qr-empty-state">
+                  {weixinQrViewer.loading || weixinQrViewer.justStarted
+                    ? "正在获取二维码..."
+                    : "当前还没有可展示的二维码，请点击“获取最新二维码”。"}
+                </div>
+              )}
+            </div>
+
+            <pre className="log-output qr-log-output">
+              {weixinQrViewer.output || "这里会显示微信登录过程中的实时输出。"}
+            </pre>
+          </div>
         </ModalShell>
       ) : null}
     </div>

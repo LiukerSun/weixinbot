@@ -23,16 +23,24 @@ type ModelSummary struct {
 	Totals            UsageTotals `json:"totals"`
 }
 
+type RecentModelInfo struct {
+	Provider  string `json:"provider"`
+	Model     string `json:"model"`
+	ModelRef  string `json:"modelRef"`
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
 type InstanceStats struct {
-	Instance               string         `json:"instance"`
-	Path                   string         `json:"path"`
-	ConfiguredPrimaryModel string         `json:"configuredPrimaryModel"`
-	ContainerStats         ContainerStats `json:"containerStats"`
-	GatewayState           string         `json:"gatewayState"`
-	SessionFiles           int            `json:"sessionFiles"`
-	AssistantMessages      int64          `json:"assistantMessages"`
-	Totals                 UsageTotals    `json:"totals"`
-	Models                 []ModelSummary `json:"models"`
+	Instance               string           `json:"instance"`
+	Path                   string           `json:"path"`
+	ConfiguredPrimaryModel string           `json:"configuredPrimaryModel"`
+	RecentModel            *RecentModelInfo `json:"recentModel,omitempty"`
+	ContainerStats         ContainerStats   `json:"containerStats"`
+	GatewayState           string           `json:"gatewayState"`
+	SessionFiles           int              `json:"sessionFiles"`
+	AssistantMessages      int64            `json:"assistantMessages"`
+	Totals                 UsageTotals      `json:"totals"`
+	Models                 []ModelSummary   `json:"models"`
 }
 
 type StatsSummary struct {
@@ -95,17 +103,17 @@ type EffectiveQuota struct {
 }
 
 type InstanceView struct {
-	Stats          InstanceStats         `json:"stats"`
-	Quota          EffectiveQuota        `json:"quota"`
-	QuotaState     *QuotaState           `json:"quotaState,omitempty"`
-	QuotaUsage     map[string]int64      `json:"quotaUsage"`
-	QuotaExceeded  map[string]bool       `json:"quotaExceeded"`
-	QuotaRatio     map[string]float64    `json:"quotaRatio"`
-	QuotaSource    *QuotaPolicy          `json:"quotaSource,omitempty"`
-	DefaultQuota   QuotaPolicy           `json:"defaultQuota"`
-	RecentTopModel *ModelSummary         `json:"recentTopModel,omitempty"`
-	Tags           map[string]string     `json:"tags,omitempty"`
-	Actions        map[string]ActionHint `json:"actions"`
+	Stats         InstanceStats         `json:"stats"`
+	Quota         EffectiveQuota        `json:"quota"`
+	QuotaState    *QuotaState           `json:"quotaState,omitempty"`
+	QuotaUsage    map[string]int64      `json:"quotaUsage"`
+	QuotaExceeded map[string]bool       `json:"quotaExceeded"`
+	QuotaRatio    map[string]float64    `json:"quotaRatio"`
+	QuotaSource   *QuotaPolicy          `json:"quotaSource,omitempty"`
+	DefaultQuota  QuotaPolicy           `json:"defaultQuota"`
+	RecentModel   *RecentModelInfo      `json:"recentModel,omitempty"`
+	Tags          map[string]string     `json:"tags,omitempty"`
+	Actions       map[string]ActionHint `json:"actions"`
 }
 
 type ArchiveInfo struct {
@@ -166,4 +174,31 @@ type ActionResponse struct {
 	Message  string `json:"message"`
 	Instance string `json:"instance,omitempty"`
 	Command  string `json:"command,omitempty"`
+}
+
+type InstanceLogsResponse struct {
+	GeneratedAt string   `json:"generatedAt"`
+	Instance    string   `json:"instance"`
+	Service     string   `json:"service"`
+	Tail        int      `json:"tail"`
+	Services    []string `json:"services"`
+	Content     string   `json:"content"`
+}
+
+type WeixinLoginStartRequest struct {
+	Force bool `json:"force"`
+}
+
+type WeixinLoginStatusResponse struct {
+	GeneratedAt string `json:"generatedAt"`
+	Instance    string `json:"instance"`
+	Active      bool   `json:"active"`
+	Connected   bool   `json:"connected"`
+	Status      string `json:"status"`
+	Message     string `json:"message,omitempty"`
+	QRURL       string `json:"qrUrl,omitempty"`
+	Output      string `json:"output,omitempty"`
+	StartedAt   string `json:"startedAt,omitempty"`
+	UpdatedAt   string `json:"updatedAt,omitempty"`
+	FinishedAt  string `json:"finishedAt,omitempty"`
 }

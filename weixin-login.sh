@@ -213,7 +213,15 @@ ensure_weixin_plugin() {
   fi
 
   echo "正在安装微信插件..."
-  compose run -T --rm openclaw-cli plugins install "@tencent-weixin/openclaw-weixin"
+  if has_cmd timeout; then
+    timeout 180s compose run -T --rm --no-deps openclaw-cli plugins install "@tencent-weixin/openclaw-weixin" || true
+  else
+    compose run -T --rm --no-deps openclaw-cli plugins install "@tencent-weixin/openclaw-weixin" || true
+  fi
+  if ! compose run -T --rm --no-deps --entrypoint sh openclaw-cli -lc '[ -d /home/node/.openclaw/extensions/openclaw-weixin ]'; then
+    echo "微信插件安装失败：未发现扩展目录"
+    exit 1
+  fi
   sync_instance_config
   compose restart openclaw-gateway >/dev/null
   wait_for_gateway

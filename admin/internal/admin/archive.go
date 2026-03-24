@@ -206,9 +206,16 @@ func (s *Server) restoreArchive(ctx context.Context, archiveID string) (ActionRe
 		"--instance", metadata.Instance,
 	)
 
+	if err := os.Remove(archivePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return ActionResponse{}, err
+	}
+	if err := os.Remove(filepath.Join(s.cfg.ArchivesDir, fmt.Sprintf("%s.json", metadata.ID))); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return ActionResponse{}, err
+	}
+
 	return ActionResponse{
 		OK:       true,
-		Message:  fmt.Sprintf("%s restored from %s", metadata.Instance, metadata.ArchiveFile),
+		Message:  fmt.Sprintf("%s restored from %s and archive removed", metadata.Instance, metadata.ArchiveFile),
 		Instance: metadata.Instance,
 		Command:  archivePath,
 	}, nil
