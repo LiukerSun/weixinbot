@@ -182,6 +182,14 @@ func (s *Server) handleInstanceActions(w http.ResponseWriter, r *http.Request) {
 			}
 			s.writeJSON(w, http.StatusOK, response)
 			return
+		case "conversations":
+			response, err := s.listConversations(instanceName)
+			if err != nil {
+				s.writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			s.writeJSON(w, http.StatusOK, response)
+			return
 		case "weixin-qr":
 			response, err := s.weixinLoginStatus(r.Context(), instanceName)
 			if err != nil {
@@ -191,6 +199,21 @@ func (s *Server) handleInstanceActions(w http.ResponseWriter, r *http.Request) {
 			s.writeJSON(w, http.StatusOK, response)
 			return
 		}
+	}
+
+	if len(parts) == 3 && r.Method == http.MethodGet && parts[1] == "conversations" {
+		response, err := s.getConversationDetail(
+			instanceName,
+			parts[2],
+			r.URL.Query().Get("offset"),
+			r.URL.Query().Get("limit"),
+		)
+		if err != nil {
+			s.writeError(w, http.StatusNotFound, err)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, response)
+		return
 	}
 
 	if r.Method == http.MethodPost && len(parts) == 3 && parts[1] == "weixin-qr" {

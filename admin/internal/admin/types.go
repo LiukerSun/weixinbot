@@ -185,6 +185,69 @@ type InstanceLogsResponse struct {
 	Content     string   `json:"content"`
 }
 
+type ConversationSummary struct {
+	ID                string           `json:"id"`
+	SessionID         string           `json:"sessionId"`
+	FileName          string           `json:"fileName"`
+	FilePath          string           `json:"filePath"`
+	Status            string           `json:"status"`
+	Current           bool             `json:"current"`
+	SessionKey        string           `json:"sessionKey,omitempty"`
+	ChatType          string           `json:"chatType,omitempty"`
+	OriginLabel       string           `json:"originLabel,omitempty"`
+	CreatedAt         string           `json:"createdAt,omitempty"`
+	UpdatedAt         string           `json:"updatedAt,omitempty"`
+	LastMessageAt     string           `json:"lastMessageAt,omitempty"`
+	MessageCount      int              `json:"messageCount"`
+	UserMessages      int              `json:"userMessages"`
+	AssistantMessages int              `json:"assistantMessages"`
+	ToolMessages      int              `json:"toolMessages"`
+	Preview           string           `json:"preview,omitempty"`
+	RecentModel       *RecentModelInfo `json:"recentModel,omitempty"`
+}
+
+type ConversationContentBlock struct {
+	Type      string `json:"type"`
+	Text      string `json:"text,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+	DataURL   string `json:"dataUrl,omitempty"`
+	Note      string `json:"note,omitempty"`
+}
+
+type ConversationMessageView struct {
+	ID         string                     `json:"id,omitempty"`
+	Role       string                     `json:"role"`
+	EntryType  string                     `json:"entryType"`
+	Timestamp  string                     `json:"timestamp,omitempty"`
+	Provider   string                     `json:"provider,omitempty"`
+	Model      string                     `json:"model,omitempty"`
+	ToolName   string                     `json:"toolName,omitempty"`
+	ToolCallID string                     `json:"toolCallId,omitempty"`
+	StopReason string                     `json:"stopReason,omitempty"`
+	Error      bool                       `json:"error,omitempty"`
+	Usage      *UsageTotals               `json:"usage,omitempty"`
+	Content    []ConversationContentBlock `json:"content"`
+}
+
+type ConversationListResponse struct {
+	GeneratedAt string                `json:"generatedAt"`
+	Instance    string                `json:"instance"`
+	Sessions    []ConversationSummary `json:"sessions"`
+}
+
+type ConversationDetailResponse struct {
+	GeneratedAt   string                    `json:"generatedAt"`
+	Instance      string                    `json:"instance"`
+	Conversation  ConversationSummary       `json:"conversation"`
+	Messages      []ConversationMessageView `json:"messages"`
+	Offset        int                       `json:"offset"`
+	Limit         int                       `json:"limit"`
+	TotalMessages int                       `json:"totalMessages"`
+	HasOlder      bool                      `json:"hasOlder"`
+	HasNewer      bool                      `json:"hasNewer"`
+}
+
 type WeixinLoginStartRequest struct {
 	Force bool `json:"force"`
 }

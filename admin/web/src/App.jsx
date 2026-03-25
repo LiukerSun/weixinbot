@@ -33,6 +33,7 @@ const emptyQuotaForm = {
 };
 
 const logTailOptions = [100, 300, 1000, 3000];
+const conversationPageSize = 80;
 
 function mergeWeixinQrViewer(response, current = null) {
   return {
@@ -226,6 +227,58 @@ function buildQuotaPayload(form) {
   };
 }
 
+function conversationStatusTone(session) {
+  if (session.current) {
+    return "good";
+  }
+  if (session.status === "deleted") {
+    return "danger";
+  }
+  if (session.status === "reset") {
+    return "warn";
+  }
+  return "muted";
+}
+
+function conversationStatusLabel(session) {
+  if (session.current) {
+    return "current";
+  }
+  if (session.status === "deleted") {
+    return "deleted";
+  }
+  if (session.status === "reset") {
+    return "reset";
+  }
+  return "active";
+}
+
+function conversationRoleTone(role) {
+  if (role === "assistant") {
+    return "good";
+  }
+  if (role === "user") {
+    return "warn";
+  }
+  if (role === "toolResult") {
+    return "muted";
+  }
+  return "danger";
+}
+
+function conversationRoleLabel(role) {
+  if (role === "assistant") {
+    return "assistant";
+  }
+  if (role === "user") {
+    return "user";
+  }
+  if (role === "toolResult") {
+    return "tool";
+  }
+  return role || "message";
+}
+
 export default function App() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -238,6 +291,7 @@ export default function App() {
   const [busyAction, setBusyAction] = useState("");
   const [notice, setNotice] = useState("");
   const [logViewer, setLogViewer] = useState(null);
+  const [conversationViewer, setConversationViewer] = useState(null);
   const [weixinQrViewer, setWeixinQrViewer] = useState(null);
   const [weixinQrImage, setWeixinQrImage] = useState("");
 
@@ -397,6 +451,155 @@ export default function App() {
 
   function closeLogViewer() {
     setLogViewer(null);
+  }
+
+  async function loadConversationDetail(
+    instanceName,
+    conversationId,
+    options = {},
+    sessionsOverride = null,
+  ) {
+    const offset =
+      options.offset != null ? Number(options.offset) : conversationViewer?.offset;
+    const limit =
+      options.limit != null ? Number(options.limit) : conversationViewer?.limit || conversationPageSize;
+
+    setConversationViewer((prev) => ({
+      ...(prev || {
+        instance: instanceName,
+        sessions: [],
+        generatedAt: "",
+        loading: false,
+        error: "",
+      }),
+      instance: instanceName,
+      sessions: sessionsOverride || prev?.sessions || [],
+      selectedId: conversationId,
+      offset: Number.isFinite(offset) ? offset : prev?.offset || 0,
+      limit: Number.isFinite(limit) ? limit : prev?.limit || conversationPageSize,
+      detailLoading: true,
+      detailError: "",
+    }));
+
+    try {
+      const params = new URLSearchParams();
+      if (Number.isFinite(offset)) {
+        params.set("offset", String(offset));
+      }
+      if (Number.isFinite(limit)) {
+        params.set("limit", String(limit));
+      }
+      const response = await requestJSON(
+        `/api/instances/${instanceName}/conversations/${encodeURIComponent(conversationId)}${
+          params.size ? `?${params.toString()}` : ""
+        }`,
+      );
+      setConversationViewer((prev) => ({
+        ...(prev || {}),
+        instance: response.instance,
+        sessions: sessionsOverride || prev?.sessions || [],
+        selectedId: conversationId,
+        conversation: response.conversation || null,
+        messages: response.messages || [],
+        detailGeneratedAt: response.generatedAt || "",
+        offset: Number(response.offset || 0),
+        limit: Number(response.limit || conversationPageSize),
+        totalMessages: Number(response.totalMessages || 0),
+        hasOlder: Boolean(response.hasOlder),
+        hasNewer: Boolean(response.hasNewer),
+        loading: false,
+        detailLoading: false,
+        detailError: "",
+      }));
+    } catch (requestError) {
+      setConversationViewer((prev) => ({
+        ...(prev || {}),
+        instance: instanceName,
+        sessions: sessionsOverride || prev?.sessions || [],
+        selectedId: conversationId,
+        offset: Number.isFinite(offset) ? offset : prev?.offset || 0,
+        limit: Number.isFinite(limit) ? limit : prev?.limit || conversationPageSize,
+        loading: false,
+        detailLoading: false,
+        detailError: requestError.message,
+      }));
+    }
+  }
+
+  async function openConversationViewer(instanceName) {
+    setConversationViewer({
+      instance: instanceName,
+      sessions: [],
+      generatedAt: "",
+      detailGeneratedAt: "",
+      selectedId: "",
+      conversation: null,
+      messages: [],
+      offset: 0,
+      limit: conversationPageSize,
+      totalMessages: 0,
+      hasOlder: false,
+      hasNewer: false,
+      loading: true,
+      detailLoading: false,
+      error: "",
+      detailError: "",
+    });
+
+    try {
+      const response = await requestJSON(`/api/instances/${instanceName}/conversations`);
+      const sessions = response.sessions || [];
+      const selectedId = sessions[0]?.id || "";
+      setConversationViewer({
+        instance: response.instance,
+        sessions,
+        generatedAt: response.generatedAt || "",
+        detailGeneratedAt: "",
+        selectedId,
+        conversation: null,
+        messages: [],
+        offset: 0,
+        limit: conversationPageSize,
+        totalMessages: 0,
+        hasOlder: false,
+        hasNewer: false,
+        loading: false,
+        detailLoading: Boolean(selectedId),
+        error: "",
+        detailError: "",
+      });
+      if (selectedId) {
+        await loadConversationDetail(
+          response.instance,
+          selectedId,
+          { limit: conversationPageSize },
+          sessions,
+        );
+      }
+    } catch (requestError) {
+      setConversationViewer({
+        instance: instanceName,
+        sessions: [],
+        generatedAt: "",
+        detailGeneratedAt: "",
+        selectedId: "",
+        conversation: null,
+        messages: [],
+        offset: 0,
+        limit: conversationPageSize,
+        totalMessages: 0,
+        hasOlder: false,
+        hasNewer: false,
+        loading: false,
+        detailLoading: false,
+        error: requestError.message,
+        detailError: "",
+      });
+    }
+  }
+
+  function closeConversationViewer() {
+    setConversationViewer(null);
   }
 
   async function loadWeixinQrStatus(instanceName) {
@@ -801,6 +1004,13 @@ export default function App() {
                               onClick={() => openLogViewer(instance)}
                             >
                               查看日志
+                            </button>
+                            <button
+                              type="button"
+                              className="ghost-button log-link-button"
+                              onClick={() => openConversationViewer(instance.stats.instance)}
+                            >
+                              查看对话
                             </button>
                             <button
                               type="button"
@@ -1245,6 +1455,193 @@ export default function App() {
         </ModalShell>
       ) : null}
 
+      {conversationViewer ? (
+        <ModalShell
+          title={`对话历史 · ${conversationViewer.instance}`}
+          kicker="Conversations"
+          onClose={closeConversationViewer}
+          xwide
+          scrollLock
+        >
+          <div className="conversation-toolbar">
+            <div className="selected-instance conversation-summary-card">
+              <div className="cell-title">{conversationViewer.instance}</div>
+              <div className="cell-subtitle">
+                会话 {formatNumber(conversationViewer.sessions?.length || 0)} · 列表更新时间 {conversationViewer.generatedAt || "-"}
+              </div>
+            </div>
+
+            <div className="log-toolbar-actions">
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => openConversationViewer(conversationViewer.instance)}
+                disabled={conversationViewer.loading || conversationViewer.detailLoading}
+              >
+                {conversationViewer.loading ? "刷新中..." : "刷新会话"}
+              </button>
+            </div>
+          </div>
+
+          {conversationViewer.error ? <div className="banner error">{conversationViewer.error}</div> : null}
+
+          <div className="conversation-layout">
+            <aside className="conversation-sidebar">
+              {conversationViewer.loading ? (
+                <div className="empty-state">正在加载会话列表...</div>
+              ) : conversationViewer.sessions?.length ? (
+                conversationViewer.sessions.map((session) => (
+                  <button
+                    type="button"
+                    key={session.id}
+                    className={`conversation-session-card${
+                      conversationViewer.selectedId === session.id ? " is-selected" : ""
+                    }`}
+                    onClick={() =>
+                      loadConversationDetail(
+                        conversationViewer.instance,
+                        session.id,
+                        { limit: conversationPageSize },
+                      )
+                    }
+                    disabled={conversationViewer.detailLoading && conversationViewer.selectedId === session.id}
+                  >
+                    <div className="conversation-session-top">
+                      <div className="cell-title conversation-session-title">
+                        {session.current ? "当前会话" : session.fileName}
+                      </div>
+                      <StatusBadge
+                        tone={conversationStatusTone(session)}
+                        text={conversationStatusLabel(session)}
+                      />
+                    </div>
+                    <div className="cell-subtitle">{session.preview || "暂无预览"}</div>
+                    <div className="conversation-session-meta">
+                      <span>{session.originLabel || session.chatType || session.sessionKey || "-"}</span>
+                      <span>{session.updatedAt || session.lastMessageAt || session.createdAt || "-"}</span>
+                    </div>
+                    <div className="conversation-session-meta">
+                      <span>
+                        U {formatNumber(session.userMessages)} / A {formatNumber(session.assistantMessages)}
+                      </span>
+                      <span>{session.recentModel?.modelRef || "-"}</span>
+                    </div>
+                  </button>
+                ))
+              ) : (
+                <div className="empty-state">这个实例还没有找到会话历史。</div>
+              )}
+            </aside>
+
+            <section className="conversation-main">
+              {conversationViewer.detailError ? (
+                <div className="banner error">{conversationViewer.detailError}</div>
+              ) : null}
+
+              {conversationViewer.conversation ? (
+                <>
+                  <div className="conversation-detail-card">
+                    <div className="conversation-detail-header">
+                      <div>
+                        <div className="cell-title">{conversationViewer.conversation.fileName}</div>
+                        <div className="cell-subtitle">
+                          {conversationViewer.conversation.originLabel ||
+                            conversationViewer.conversation.chatType ||
+                            conversationViewer.conversation.sessionKey ||
+                            "-"}
+                        </div>
+                      </div>
+                      <div className="conversation-detail-badges">
+                        <StatusBadge
+                          tone={conversationStatusTone(conversationViewer.conversation)}
+                          text={conversationStatusLabel(conversationViewer.conversation)}
+                        />
+                        {conversationViewer.conversation.recentModel?.modelRef ? (
+                          <StatusBadge
+                            tone="muted"
+                            text={conversationViewer.conversation.recentModel.modelRef}
+                          />
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="conversation-detail-meta">
+                      <span>创建: {conversationViewer.conversation.createdAt || "-"}</span>
+                      <span>最后消息: {conversationViewer.conversation.lastMessageAt || "-"}</span>
+                      <span>详情更新时间: {conversationViewer.detailGeneratedAt || "-"}</span>
+                      <span>
+                        展示 {conversationViewer.messages?.length ? conversationViewer.offset + 1 : 0}
+                        {" - "}
+                        {conversationViewer.offset + (conversationViewer.messages?.length || 0)}
+                        {" / "}
+                        {conversationViewer.totalMessages || conversationViewer.conversation.messageCount || 0}
+                      </span>
+                    </div>
+                  </div>
+
+                  {conversationViewer.detailLoading ? (
+                    <div className="empty-state">正在加载会话内容...</div>
+                  ) : conversationViewer.messages?.length ? (
+                    <>
+                      <div className="conversation-pagination">
+                        <button
+                          type="button"
+                          className="ghost-button"
+                          disabled={!conversationViewer.hasOlder || conversationViewer.detailLoading}
+                          onClick={() =>
+                            loadConversationDetail(conversationViewer.instance, conversationViewer.selectedId, {
+                              offset: Math.max(
+                                0,
+                                (conversationViewer.offset || 0) - (conversationViewer.limit || conversationPageSize),
+                              ),
+                              limit: conversationViewer.limit || conversationPageSize,
+                            })
+                          }
+                        >
+                          上一页
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost-button"
+                          disabled={!conversationViewer.hasNewer || conversationViewer.detailLoading}
+                          onClick={() =>
+                            loadConversationDetail(conversationViewer.instance, conversationViewer.selectedId, {
+                              offset: (conversationViewer.offset || 0) + (conversationViewer.limit || conversationPageSize),
+                              limit: conversationViewer.limit || conversationPageSize,
+                            })
+                          }
+                        >
+                          下一页
+                        </button>
+                      </div>
+
+                      <div className="conversation-page-note">
+                        默认只加载最近 {conversationViewer.limit || conversationPageSize} 条消息，避免大文件把界面拖垮。
+                      </div>
+
+                      <div className="conversation-message-list">
+                        {conversationViewer.messages.map((message, index) => (
+                          <ConversationMessageCard
+                            key={`${message.id || message.timestamp || "message"}:${message.role}:${index}`}
+                            message={message}
+                          />
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="empty-state">这个会话里还没有可展示的消息。</div>
+                  )}
+                </>
+              ) : conversationViewer.detailLoading ? (
+                <div className="empty-state">正在加载会话内容...</div>
+              ) : (
+                <div className="empty-state">从左侧选择一个会话即可查看完整对话历史。</div>
+              )}
+            </section>
+          </div>
+        </ModalShell>
+      ) : null}
+
       {logViewer ? (
         <ModalShell
           title={`运行日志 · ${logViewer.instance}`}
@@ -1402,11 +1799,83 @@ function StatusBadge({ text, tone }) {
   return <span className={`status-badge tone-${tone}`}>{text}</span>;
 }
 
-function ModalShell({ kicker, title, children, onClose, wide = false }) {
+function ConversationMessageCard({ message }) {
+  return (
+    <article className="conversation-message-card">
+      <div className="conversation-message-header">
+        <div className="conversation-message-title">
+          <StatusBadge tone={conversationRoleTone(message.role)} text={conversationRoleLabel(message.role)} />
+          {message.toolName ? <span className="cell-subtitle">tool: {message.toolName}</span> : null}
+        </div>
+        <div className="conversation-message-meta">
+          <span>{message.timestamp || "-"}</span>
+          {message.provider || message.model ? (
+            <span>
+              {[message.provider, message.model].filter(Boolean).join(" / ")}
+            </span>
+          ) : null}
+          {message.usage?.totalTokens ? (
+            <span>tokens {formatNumber(message.usage.totalTokens)}</span>
+          ) : null}
+          {message.stopReason ? <span>{message.stopReason}</span> : null}
+          {message.error ? <span>error</span> : null}
+        </div>
+      </div>
+
+      <div className="conversation-content-list">
+        {(message.content || []).map((block, index) => (
+          <ConversationContentBlockView key={`${block.type}:${index}`} block={block} />
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function ConversationContentBlockView({ block }) {
+  if (block.type === "image") {
+    return (
+      <div className="conversation-block conversation-block-image">
+        {block.dataUrl ? (
+          <img className="conversation-image-preview" src={block.dataUrl} alt="会话图片内容" />
+        ) : (
+          <div className="cell-subtitle">{block.note || "图片内容暂不可预览"}</div>
+        )}
+      </div>
+    );
+  }
+
+  if (block.type === "toolCall") {
+    return (
+      <div className="conversation-block">
+        <div className="conversation-block-label">{block.name || "tool call"}</div>
+        {block.arguments ? <pre className="conversation-block-pre">{block.arguments}</pre> : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className={`conversation-block${block.type === "thinking" ? " conversation-block-thinking" : ""}`}>
+      {block.note ? <div className="conversation-block-label">{block.note}</div> : null}
+      <pre className="conversation-block-pre">{block.text || ""}</pre>
+    </div>
+  );
+}
+
+function ModalShell({
+  kicker,
+  title,
+  children,
+  onClose,
+  wide = false,
+  xwide = false,
+  scrollLock = false,
+}) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div
-        className={`modal-card${wide ? " modal-card-wide" : ""}`}
+        className={`modal-card${wide ? " modal-card-wide" : ""}${xwide ? " modal-card-xwide" : ""}${
+          scrollLock ? " modal-card-scroll-lock" : ""
+        }`}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="modal-header">
@@ -1418,7 +1887,7 @@ function ModalShell({ kicker, title, children, onClose, wide = false }) {
             关闭
           </button>
         </div>
-        {children}
+        <div className={`modal-body${scrollLock ? " modal-body-scroll-lock" : ""}`}>{children}</div>
       </div>
     </div>
   );
