@@ -13,6 +13,8 @@ DEFAULT_OPENAI_MODEL="gpt-5.4"
 DEFAULT_PORT_BASE="39088"
 DEFAULT_TIMEZONE="Asia/Shanghai"
 DEFAULT_WEIXIN_PLUGIN_PACKAGE="@tencent-weixin/openclaw-weixin"
+DEFAULT_OPENCLAW_UID="1000"
+DEFAULT_OPENCLAW_GID="1000"
 
 EDIT_DEFAULTS=0
 ONE_SHOT_NAME=""
@@ -28,6 +30,14 @@ warn() {
 fail() {
   printf '[ERROR] %s\n' "$*" >&2
   exit 1
+}
+
+json_escape() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  printf '%s' "$value"
 }
 
 has_cmd() {
@@ -102,6 +112,35 @@ write_env_kv() {
   printf '%s=%q\n' "$key" "$value"
 }
 
+normalize_primary_model_provider() {
+  local provider="${1,,}"
+
+  case "$provider" in
+    zai|openai)
+      printf '%s' "$provider"
+      ;;
+    *)
+      fail "不支持的主模型提供方: ${1}，当前只支持 zai 或 openai"
+      ;;
+  esac
+}
+
+resolve_primary_model_ref() {
+  case "$OPENCLAW_PRIMARY_MODEL_PROVIDER" in
+    zai)
+      [[ -n "${ZAI_MODEL:-}" ]] || fail "ZAI_MODEL 不能为空"
+      printf 'zai/%s' "$ZAI_MODEL"
+      ;;
+    openai)
+      [[ -n "${OPENAI_MODEL:-}" ]] || fail "OPENAI_MODEL 不能为空"
+      printf 'openai/%s' "$OPENAI_MODEL"
+      ;;
+    *)
+      fail "未识别的主模型提供方: ${OPENCLAW_PRIMARY_MODEL_PROVIDER}"
+      ;;
+  esac
+}
+
 load_defaults() {
   if [[ -f "$DEFAULTS_FILE" ]]; then
     # shellcheck disable=SC1090
@@ -142,6 +181,7 @@ configure_defaults() {
   PORT_BASE="${PORT_BASE:-$DEFAULT_PORT_BASE}"
   OPENCLAW_TZ="${OPENCLAW_TZ:-$DEFAULT_TIMEZONE}"
   WEIXIN_PLUGIN_PACKAGE="${WEIXIN_PLUGIN_PACKAGE:-$DEFAULT_WEIXIN_PLUGIN_PACKAGE}"
+  OPENCLAW_PRIMARY_MODEL_PROVIDER="$(normalize_primary_model_provider "$OPENCLAW_PRIMARY_MODEL_PROVIDER")"
 
   if [[ -f "$DEFAULTS_FILE" && "$EDIT_DEFAULTS" != "1" ]]; then
     if prompt_yes_no "检测到已保存默认参数，直接使用" "Y"; then
@@ -153,6 +193,7 @@ configure_defaults() {
   OPENCLAW_IMAGE="$(prompt_required "OpenClaw Docker Image" "$OPENCLAW_IMAGE")"
   INSTANCES_DIR="$(prompt_required "实例根目录" "$INSTANCES_DIR")"
   OPENCLAW_PRIMARY_MODEL_PROVIDER="$(prompt_required "主模型提供方 (zai/openai)" "$OPENCLAW_PRIMARY_MODEL_PROVIDER")"
+  OPENCLAW_PRIMARY_MODEL_PROVIDER="$(normalize_primary_model_provider "$OPENCLAW_PRIMARY_MODEL_PROVIDER")"
   ZAI_API_KEY="$(prompt "ZAI API Key" "$ZAI_API_KEY")"
   ZAI_MODEL="$(prompt_required "ZAI 模型" "$ZAI_MODEL")"
   OPENAI_API_KEY="$(prompt "OpenAI API Key" "$OPENAI_API_KEY")"
@@ -188,7 +229,7 @@ find_free_port_pair() {
 
   while true; do
     if ! port_in_use "$candidate" && ! port_in_use "$((candidate + 1))"; then
-      printf '%s %s' "$candidate" "$((candidate + 1))"
+      printf '%s %s\n' "$candidate" "$((candidate + 1))"
       return
     fi
     candidate=$((candidate + 2))
@@ -280,6 +321,7 @@ write_instance_env() {
   local state_dir="$5"
   local workspace_dir="$6"
   local token="$7"
+  local primary_model_ref="$8"
 
   {
     write_env_kv "COMPOSE_PROJECT_NAME" "$instance_name"
@@ -292,6 +334,7 @@ write_instance_env() {
     write_env_kv "OPENCLAW_STATE_DIR" "$state_dir"
     write_env_kv "OPENCLAW_WORKSPACE_DIR" "$workspace_dir"
     write_env_kv "OPENCLAW_PRIMARY_MODEL_PROVIDER" "$OPENCLAW_PRIMARY_MODEL_PROVIDER"
+    write_env_kv "OPENCLAW_PRIMARY_MODEL_REF" "$primary_model_ref"
     write_env_kv "ZAI_API_KEY" "${ZAI_API_KEY:-}"
     write_env_kv "ZAI_MODEL" "${ZAI_MODEL:-}"
     write_env_kv "OPENAI_API_KEY" "${OPENAI_API_KEY:-}"
@@ -304,12 +347,29 @@ write_instance_env() {
 
 write_openclaw_json() {
   local config_file="$1"
+  local primary_model_ref="$2"
   local brave_key="${BRAVE_API_KEY:-}"
-  local escaped_brave_key="${brave_key//\\/\\\\}"
-  escaped_brave_key="${escaped_brave_key//\"/\\\"}"
+  local escaped_brave_key
+  local escaped_primary_model_ref
+
+  escaped_brave_key="$(json_escape "$brave_key")"
+  escaped_primary_model_ref="$(json_escape "$primary_model_ref")"
 
   cat >"$config_file" <<EOF
 {
+  "gateway": {
+    "mode": "local",
+    "controlUi": {
+      "dangerouslyAllowHostHeaderOriginFallback": true
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "${escaped_primary_model_ref}"
+      }
+    }
+  },
   "plugins": {
     "allow": []
   },
@@ -324,16 +384,33 @@ write_openclaw_json() {
 EOF
 }
 
+normalize_instance_permissions() {
+  local state_dir="$1"
+  local workspace_dir="$2"
+
+  chown -R "${DEFAULT_OPENCLAW_UID}:${DEFAULT_OPENCLAW_GID}" "$state_dir" "$workspace_dir"
+  find "$state_dir" "$workspace_dir" -type d -exec chmod 755 {} +
+  find "$state_dir" "$workspace_dir" -type f -exec chmod 644 {} +
+}
+
+host_healthcheck_ok() {
+  local port="$1"
+
+  if has_cmd curl; then
+    curl -fsS "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1
+    return $?
+  fi
+
+  node -e "fetch('http://127.0.0.1:${port}/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1
+}
+
 wait_for_gateway() {
-  local env_file="$1"
-  local compose_file="$2"
+  local gateway_port="$1"
   local retries=60
   local i=0
 
   for ((i = 1; i <= retries; i += 1)); do
-    if compose "$env_file" "$compose_file" exec -T openclaw-gateway node -e \
-      "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" \
-      >/dev/null 2>&1; then
+    if host_healthcheck_ok "$gateway_port"; then
       return 0
     fi
     sleep 2
@@ -360,17 +437,23 @@ create_instance() {
 
   read -r gateway_port bridge_port < <(find_free_port_pair "$PORT_BASE")
   local token
+  local primary_model_ref
   token="$(openssl rand -hex 32)"
+  primary_model_ref="$(resolve_primary_model_ref)"
+
+  info "开始创建实例: ${instance_name}"
+  info "分配端口: gateway=${gateway_port}, bridge=${bridge_port}"
 
   mkdir -p "$state_dir" "$workspace_dir"
-  chmod 777 "$state_dir" "$workspace_dir"
 
   write_compose_file "$compose_file"
-  write_instance_env "$env_file" "$instance_name" "$gateway_port" "$bridge_port" "$state_dir" "$workspace_dir" "$token"
-  write_openclaw_json "$config_file"
+  write_instance_env "$env_file" "$instance_name" "$gateway_port" "$bridge_port" "$state_dir" "$workspace_dir" "$token" "$primary_model_ref"
+  write_openclaw_json "$config_file" "$primary_model_ref"
+  normalize_instance_permissions "$state_dir" "$workspace_dir"
 
-  compose "$env_file" "$compose_file" up -d openclaw-gateway >/dev/null
-  if ! wait_for_gateway "$env_file" "$compose_file"; then
+  info "正在启动 Docker 容器..."
+  compose "$env_file" "$compose_file" up -d openclaw-gateway
+  if ! wait_for_gateway "$gateway_port"; then
     warn "实例已创建，但 Gateway 健康检查超时: ${instance_name}"
   fi
 

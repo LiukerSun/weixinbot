@@ -6,6 +6,8 @@
   交互式保存默认参数，然后连续输入实例名，快速创建多个 OpenClaw Docker 实例。
 - `./weixin-connect.sh <instance>`
   对指定实例安装或修复 `openclaw-weixin` 插件，并进入微信二维码登录流程。
+- `./uninstall-openclaw.sh`
+  删除指定实例或全部实例，并清理对应目录与容器。
 
 ## 用法
 
@@ -39,6 +41,24 @@
 
 ```bash
 ./weixin-connect.sh demo01
+```
+
+删除单个实例：
+
+```bash
+./uninstall-openclaw.sh --name demo01
+```
+
+删除全部实例：
+
+```bash
+./uninstall-openclaw.sh --all
+```
+
+删除全部实例并清空保存的默认参数：
+
+```bash
+./uninstall-openclaw.sh --all --purge-defaults
 ```
 
 不传实例名时，`weixin-connect.sh` 会列出实例并让你手输选择。
